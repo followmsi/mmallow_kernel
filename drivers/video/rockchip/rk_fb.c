@@ -164,6 +164,7 @@ int rk_fb_pixel_width(int data_format)
 
 	switch (data_format) {
 	case XBGR888:
+	case XRGB888:
 	case ABGR888:
 	case ARGB888:
 	case FBDC_ARGB_888:
@@ -172,9 +173,11 @@ int rk_fb_pixel_width(int data_format)
 		pixel_width = 4 * 8;
 		break;
 	case RGB888:
+	case BGR888:
 		pixel_width = 3 * 8;
 		break;
 	case RGB565:
+	case BGR565:
 	case FBDC_RGB_565:
 		pixel_width = 2 * 8;
 		break;
@@ -189,6 +192,12 @@ int rk_fb_pixel_width(int data_format)
 	case YUV444_A:
 		pixel_width = 8;
 		break;
+	case YUYV422:
+	case UYVY422:
+	case YUYV420:
+	case UYVY420:
+		pixel_width = 16;
+		break;
 	default:
 		pr_warn("%s: unsupported format: 0x%x\n",
 			__func__, data_format);
@@ -199,12 +208,15 @@ int rk_fb_pixel_width(int data_format)
 
 static int rk_fb_data_fmt(int data_format, int bits_per_pixel)
 {
-	int fb_data_fmt;
+	int fb_data_fmt = 0;
 
 	if (data_format) {
 		switch (data_format) {
 		case HAL_PIXEL_FORMAT_RGBX_8888:
 			fb_data_fmt = XBGR888;
+			break;
+		case HAL_PIXEL_FORMAT_BGRX_8888:
+			fb_data_fmt = XRGB888;
 			break;
 		case HAL_PIXEL_FORMAT_RGBA_8888:
 			fb_data_fmt = ABGR888;
@@ -215,8 +227,14 @@ static int rk_fb_data_fmt(int data_format, int bits_per_pixel)
 		case HAL_PIXEL_FORMAT_RGB_888:
 			fb_data_fmt = RGB888;
 			break;
+		case HAL_PIXEL_FORMAT_BGR_888:
+			fb_data_fmt = BGR888;
+			break;
 		case HAL_PIXEL_FORMAT_RGB_565:
 			fb_data_fmt = RGB565;
+			break;
+		case HAL_PIXEL_FORMAT_BGR_565:
+			fb_data_fmt = BGR565;
 			break;
 		case HAL_PIXEL_FORMAT_YCbCr_422_SP:	/* yuv422 */
 			fb_data_fmt = YUV422;
@@ -250,6 +268,18 @@ static int rk_fb_data_fmt(int data_format, int bits_per_pixel)
 			break;
 		case HAL_PIXEL_FORMAT_FBDC_U8U8U8:	/* fbdc rgb888 */
 			fb_data_fmt = FBDC_RGBX_888;
+			break;
+		case HAL_PIXEL_FORMAT_YUYV422:		/* yuyv422 */
+			fb_data_fmt = YUYV422;
+			break;
+		case HAL_PIXEL_FORMAT_YUYV420:		/* yuyv420 */
+			fb_data_fmt = YUYV420;
+			break;
+		case HAL_PIXEL_FORMAT_UYVY422:		/* uyvy422 */
+			fb_data_fmt = UYVY422;
+			break;
+		case HAL_PIXEL_FORMAT_UYVY420:		/* uyvy420 */
+			fb_data_fmt = UYVY420;
 			break;
 		default:
 			pr_warn("%s: unsupported format: 0x%x\n",
@@ -545,8 +575,14 @@ char *get_format_string(enum data_format format, char *fmt)
 	case RGB888:
 		strcpy(fmt, "RGB888");
 		break;
+	case BGR888:
+		strcpy(fmt, "BGR888");
+		break;
 	case RGB565:
 		strcpy(fmt, "RGB565");
+		break;
+	case BGR565:
+		strcpy(fmt, "BGR565");
 		break;
 	case YUV420:
 	case YUV420_NV21:
@@ -585,6 +621,18 @@ char *get_format_string(enum data_format format, char *fmt)
 		break;
 	case FBDC_RGBX_888:
 		strcpy(fmt, "FBDC_RGBX_888");
+		break;
+	case YUYV422:
+		strcpy(fmt, "YUYV422");
+		break;
+	case YUYV420:
+		strcpy(fmt, "YUYV420");
+		break;
+	case UYVY422:
+		strcpy(fmt, "UYVY422");
+		break;
+	case UYVY420:
+		strcpy(fmt, "UYVY420");
 		break;
 	default:
 		strcpy(fmt, "invalid");
@@ -937,12 +985,15 @@ static int get_ipp_format(int fmt)
 
 	switch (fmt) {
 	case HAL_PIXEL_FORMAT_RGBX_8888:
+	case HAL_PIXEL_FORMAT_BGRX_8888:
 	case HAL_PIXEL_FORMAT_RGBA_8888:
 	case HAL_PIXEL_FORMAT_BGRA_8888:
 	case HAL_PIXEL_FORMAT_RGB_888:
+	case HAL_PIXEL_FORMAT_BGR_888:
 		ipp_fmt = IPP_XRGB_8888;
 		break;
 	case HAL_PIXEL_FORMAT_RGB_565:
+	case HAL_PIXEL_FORMAT_BGR_565:
 		ipp_fmt = IPP_RGB_565;
 		break;
 	case HAL_PIXEL_FORMAT_YCbCr_422_SP:
@@ -1678,6 +1729,7 @@ static void rk_fb_update_win(struct rk_lcdc_driver *dev_drv,
 				}
 			} else {
 				win->area[i].state = 0;
+				win->area[i].fbdc_en = 0;
 				if (dev_drv->iommu_enabled) {
 					g_now_config_addr[win->id][i] = 0;
 					g_now_config_state[win->id][i] = 0;
@@ -1857,8 +1909,10 @@ static void rk_fb_update_reg(struct rk_lcdc_driver *dev_drv,
 		} else {
 			win->z_order = -1;
 			win->state = 0;
-			for (j = 0; j < 4; j++)
+			for (j = 0; j < 4; j++) {
 				win->area[j].state = 0;
+				win->area[j].fbdc_en = 0;
+			}
 			if (dev_drv->iommu_enabled) {
 				for (j = 0; j < 4; j++) {
 					g_now_config_addr[i][j] = 0;
@@ -2123,6 +2177,7 @@ static int rk_fb_set_wb_buffer(struct fb_info *info,
 					wb_cfg->xsize * wb_cfg->ysize;
 	wb_data->xsize = wb_cfg->xsize;
 	wb_data->ysize = wb_cfg->ysize;
+	wb_data->data_format = fb_data_fmt;
 	wb_data->state = 1;
 
 	return 0;
@@ -2141,24 +2196,24 @@ static int rk_fb_set_win_buffer(struct fb_info *info,
 	struct rk_screen *screen = dev_drv->cur_screen;/*screen0;*/
 	struct fb_info *fbi;
 	int i, ion_fd, acq_fence_fd;
-	u32 xvir, yvir;
-	u32 xoffset, yoffset;
+	u32 xvir = 0, yvir = 0;
+	u32 xoffset = 0, yoffset = 0;
 
 	struct ion_handle *hdl;
 	size_t len;
-	int index_buf;
-	u8 fb_data_fmt;
-	u8 pixel_width;
-	u32 vir_width_bit;
-	u32 stride, uv_stride;
-	u32 stride_32bit_1;
-	u32 stride_32bit_2;
-	u16 uv_x_off, uv_y_off, uv_y_act;
+	int index_buf = 0;
+	u8 fb_data_fmt = 0;
+	u8 pixel_width = 0;
+	u32 vir_width_bit = 0;
+	u32 stride = 0, uv_stride = 0;
+	u32 stride_32bit_1 = 0;
+	u32 stride_32bit_2 = 0;
+	u16 uv_x_off = 0, uv_y_off = 0, uv_y_act = 0;
 	u8 is_pic_yuv = 0;
 	u8 ppixel_a = 0, global_a = 0;
 	ion_phys_addr_t phy_addr;
 	int ret = 0;
-	int buff_len;
+	int buff_len = 0;
 
 	reg_win_data->reg_area_data[0].smem_start = -1;
 	reg_win_data->area_num = 0;
@@ -3132,9 +3187,9 @@ static int rk_fb_set_par(struct fb_info *info)
 	u32 xvir = var->xres_virtual;
 	u8 data_format = var->nonstd & 0xff;
 	u8 fb_data_fmt;
-	u8 pixel_width;
+	u8 pixel_width = 0;
 	u32 vir_width_bit;
-	u32 stride, uv_stride;
+	u32 stride, uv_stride = 0;
 	u32 stride_32bit_1;
 	u32 stride_32bit_2;
 	u16 uv_x_off, uv_y_off, uv_y_act;
@@ -4078,6 +4133,7 @@ int rk_fb_register(struct rk_lcdc_driver *dev_drv,
 	struct rk_fb_par *fb_par = NULL;
 	int i = 0, ret = 0, index = 0;
 	unsigned long flags;
+	char time_line_name[16];
 
 	if (rk_fb->num_lcdc == RK30_MAX_LCDC_SUPPORT)
 		return -ENXIO;
@@ -4165,6 +4221,7 @@ int rk_fb_register(struct rk_lcdc_driver *dev_drv,
 			mutex_init(&dev_drv->output_lock);
 
 			INIT_LIST_HEAD(&dev_drv->update_regs_list);
+			INIT_LIST_HEAD(&dev_drv->saved_list);
 			mutex_init(&dev_drv->update_regs_list_lock);
 			init_kthread_worker(&dev_drv->update_regs_worker);
 
@@ -4181,8 +4238,10 @@ int rk_fb_register(struct rk_lcdc_driver *dev_drv,
 			init_kthread_work(&dev_drv->update_regs_work,
 					  rk_fb_update_regs_handler);
 
+			snprintf(time_line_name, sizeof(time_line_name),
+				 "vop%d-timeline", id);
 			dev_drv->timeline =
-			    sw_sync_timeline_create("fb-timeline");
+			    sw_sync_timeline_create(time_line_name);
 			dev_drv->timeline_max = 1;
 		}
 	}
@@ -4357,7 +4416,7 @@ int rk_fb_register(struct rk_lcdc_driver *dev_drv,
 		main_fbi->fbops->fb_pan_display(&main_fbi->var, main_fbi);
 #endif
 	} else {
-		struct fb_info *extend_fbi = rk_fb->fb[rk_fb->num_fb >> 1];
+		struct fb_info *extend_fbi = rk_fb->fb[dev_drv->fb_index_base];
 
 		extend_fbi->var.pixclock = rk_fb->fb[0]->var.pixclock;
 		extend_fbi->fbops->fb_open(extend_fbi, 1);

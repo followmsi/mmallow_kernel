@@ -186,6 +186,14 @@ enum {
 	HAL_PIXEL_FORMAT_FBDC_U8U8U8U8	= 0x27, /*ARGB888*/
 	HAL_PIXEL_FORMAT_FBDC_U8U8U8	= 0x28, /*RGBP888*/
 	HAL_PIXEL_FORMAT_FBDC_RGBA888	= 0x29, /*ABGR888*/
+	HAL_PIXEL_FORMAT_BGRX_8888 = 0x30,
+	HAL_PIXEL_FORMAT_BGR_888 = 0x31,
+	HAL_PIXEL_FORMAT_BGR_565 = 0x32,
+
+	HAL_PIXEL_FORMAT_YUYV422 = 0x33,
+	HAL_PIXEL_FORMAT_YUYV420 = 0x34,
+	HAL_PIXEL_FORMAT_UYVY422 = 0x35,
+	HAL_PIXEL_FORMAT_UYVY420 = 0x36,
 
 	HAL_PIXEL_FORMAT_YCrCb_NV12_BT709 =
 			BT709(HAL_PIXEL_FORMAT_YCrCb_NV12),
@@ -224,6 +232,7 @@ enum data_format {
 	XBGR888,
 	ABGR888,
 	BGR888,
+	BGR565,
 	FBDC_RGB_565,
 	FBDC_ARGB_888,
 	FBDC_RGBX_888,
@@ -235,6 +244,10 @@ enum data_format {
 	YUV422_A,
 	YUV444_A,
 	YUV420_NV21,
+	YUYV422,
+	YUYV420,
+	UYVY422,
+	UYVY420
 };
 #define IS_YUV_FMT(fmt) ((fmt >= YUV420) ? 1 : 0)
 #define IS_RGB_FMT(fmt) ((fmt < YUV420) ? 1 : 0)
@@ -384,6 +397,7 @@ struct rk_lcdc_win_area {
 	bool state;
 	enum data_format format;
 	u8 fmt_cfg;
+	u8 yuyv_fmt;
 	u8 swap_rb;
 	u8 swap_uv;
 	u32 y_offset;		/*yuv/rgb offset  -->LCDC_WINx_YRGB_MSTx*/

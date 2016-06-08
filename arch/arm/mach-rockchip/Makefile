@@ -1,5 +1,6 @@
 obj-y += common.o
 obj-y += cpu.o
+obj-y += rk1108.o
 obj-y += rk3036.o
 obj-y += rk312x.o
 obj-y += rk3126b.o
@@ -7,6 +8,7 @@ obj-y += rk3188.o
 obj-y += rk3288.o
 obj-y += rk322x.o
 obj-$(CONFIG_ARM_PSCI) += psci.o
+obj-$(CONFIG_ARM_PSCI) += psci_ddr.o
 ifneq ($(CONFIG_ARM_TRUSTZONE),y)
 obj-y += ddr_freq.o
 endif
