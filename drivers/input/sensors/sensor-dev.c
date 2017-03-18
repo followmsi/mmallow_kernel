@@ -2103,6 +2103,8 @@ static const struct i2c_device_id sensor_id[] = {
 	{"gs_mc3230",ACCEL_ID_MC3230},
 	{"mpu6880_acc",ACCEL_ID_MPU6880},
 	{"mpu6500_acc",ACCEL_ID_MPU6500},
+	{"bma2xx_acc",ACCEL_ID_BMA2XX},
+
 	/*compass*/
 	{"compass", COMPASS_ID_ALL},
 	{"ak8975", COMPASS_ID_AK8975},	
@@ -2127,11 +2129,13 @@ static const struct i2c_device_id sensor_id[] = {
 	{"ls_ap321xx", LIGHT_ID_AP321XX},
 	{"ls_photoresistor", LIGHT_ID_PHOTORESISTOR},
 	{"ls_us5152", LIGHT_ID_US5152},
+	{"ls_stk3410", LIGHT_ID_STK3410},
 	/*proximity sensor*/
 	{"psensor", PROXIMITY_ID_ALL},
 	{"proximity_al3006", PROXIMITY_ID_AL3006},	
 	{"ps_stk3171", PROXIMITY_ID_STK3171},
 	{"ps_ap321xx", PROXIMITY_ID_AP321XX},
+	{"ps_stk3410", PROXIMITY_ID_STK3410},
 	
 	/*temperature*/
 	{"temperature", TEMPERATURE_ID_ALL},	
@@ -2152,7 +2156,7 @@ static struct of_device_id sensor_dt_ids[] = {
 	{ .compatible = "gs_mma7660" },
 	{ .compatible = "gs_mxc6225" },
 	{ .compatible = "gs_mc3230" },
-	
+	{ .compatible = "bma2xx_acc" },
 	/*compass*/
 	{ .compatible = "ak8975" },
 	{ .compatible = "ak8963" },
@@ -2175,6 +2179,8 @@ static struct of_device_id sensor_dt_ids[] = {
 
 	{ .compatible = "ls_photoresistor" },
 	{ .compatible = "ls_us5152" },
+	{ .compatible = "ls_stk3410" },
+	{ .compatible = "ps_stk3410" },
 
 	/*temperature sensor*/
 	{ .compatible = "tmp_ms5607" },

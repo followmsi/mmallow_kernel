@@ -115,6 +115,13 @@ void rockchip_hdmiv2_cec_init(struct hdmi *hdmi)
 		/* init_waitqueue_head(&wait); */
 	}
 
+	/* Enable sending all message if sink refuse message broadcasted
+	   by us. For 3288, sending action will be break.*/
+	if (hdmi_dev->soctype == HDMI_SOC_RK3288 &&
+	    hdmi_readl(hdmi_dev, REVISION_ID) == 0x1a)
+		writel_relaxed((1 << 4) | (1 << 20),
+			       RK_GRF_VIRT + RK3288_GRF_SOC_CON16);
+
 	hdmi_writel(hdmi_dev, IH_MUTE_CEC_STAT0, m_ERR_INITIATOR |
 			m_ARB_LOST | m_NACK | m_DONE);
 	CECDBG("%s", __func__);

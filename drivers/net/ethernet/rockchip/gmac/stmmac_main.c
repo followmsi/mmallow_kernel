@@ -707,6 +707,7 @@ static void stmmac_adjust_link(struct net_device *dev)
 
 	spin_lock_irqsave(&priv->lock, flags);
 
+	bsp_priv->link = phydev->link;
 	if ((bsp_priv->chip == RK322X_GMAC) && (bsp_priv->internal_phy) &&
 	    (phydev->link != priv->oldlink)) {
 		if (phydev->link) {
@@ -941,11 +942,11 @@ gmac_set_network_leds(struct bsp_priv *bsp_priv, int active)
 	if ((bsp_priv->internal_phy) && (gpio_is_valid(bsp_priv->led_io))) {
 		if (active) {
 			/* LED on */
-			gpio_direction_output(bsp_priv->led_io,
+			gpio_set_value(bsp_priv->led_io,
 					      bsp_priv->led_io_level);
 		} else {
 			/* LED off */
-			gpio_direction_output(bsp_priv->led_io,
+			gpio_set_value(bsp_priv->led_io,
 					      !bsp_priv->led_io_level);
 		}
 	}
@@ -985,6 +986,18 @@ static int rk322x_phy_adjust(struct phy_device *phydev) {
 	phy_write(phydev,20,0x4418);
 //	phy_write(phydev,20,0x8700);
 	return 0;
+}
+
+static void phy_resume_work(struct work_struct *work)
+{
+	struct bsp_priv *bsp_priv =
+		container_of(work, struct bsp_priv, resume_work.work);
+
+	if (bsp_priv->link == 1) {
+		if (gpio_is_valid(bsp_priv->link_io))
+			/* link LED on */
+			gpio_direction_output(bsp_priv->link_io, bsp_priv->link_io_level);
+	}
 }
 
 /**
@@ -1051,14 +1064,20 @@ static int stmmac_init_phy(struct net_device *dev)
 
 	if ((bsp_priv->chip == RK322X_GMAC) && (bsp_priv->internal_phy)) {
 		rk322x_phy_adjust(phydev);
+		/* LED off */
+		gpio_direction_output(bsp_priv->led_io,
+				      !bsp_priv->led_io_level);
 	}
 
 	INIT_DELAYED_WORK(&bsp_priv->led_work, macphy_led_work);
+	INIT_DELAYED_WORK(&bsp_priv->resume_work, phy_resume_work);
+
 	/* Initialize next time the led can flash */
 	bsp_priv->led_next_time = jiffies;
 	bsp_priv->led_active = 0;
 	spin_lock_init(&bsp_priv->led_lock);
 
+        bsp_priv->link = 0;
 	return 0;
 }
 
@@ -3167,6 +3186,9 @@ int stmmac_resume(struct net_device *ndev)
 	if ((bsp_priv->chip == RK322X_GMAC) && (bsp_priv->internal_phy)) {
 		rk322x_phy_adjust(priv->phydev);
 	}
+
+	if (bsp_priv && (bsp_priv->chip == RK322X_GMAC) && (bsp_priv->internal_phy))
+		schedule_delayed_work(&bsp_priv->resume_work, 2 * HZ); /* delay 2s */
 
 	return 0;
 }

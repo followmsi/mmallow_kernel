@@ -55,14 +55,14 @@
 			pclkin_vip_ninv: pclkin_vip_ninv {
 				compatible = "rockchip,rk-fixed-clock";
 				clock-output-names = "pclkin_vip_ninv";
-				clock-frequency = <0>;
+				clock-frequency = <150000000>;
 				#clock-cells = <0>;
 			};
 
 			pclkin_vip_inv: pclkin_vip_inv {
 				compatible = "rockchip,rk-fixed-clock";
 				clock-output-names = "pclkin_vip_inv";
-				clock-frequency = <0>;
+				clock-frequency = <150000000>;
 				#clock-cells = <0>;
 			};
 
@@ -83,42 +83,42 @@
 			pclkin_cvbs2cif: pclkin_cvbs2cif {
 				compatible = "rockchip,rk-fixed-clock";
 				clock-output-names = "pclkin_cvbs2cif";
-				clock-frequency = <0>;
+				clock-frequency = <27000000>;
 				#clock-cells = <0>;
 			};
 
 			pclk_cif0_out: pclk_cif0_out {
 				compatible = "rockchip,rk-fixed-clock";
 				clock-output-names = "pclk_cif0_out";
-				clock-frequency = <0>;
+				clock-frequency = <150000000>;
 				#clock-cells = <0>;
 			};
 
 			pclk_cif1_out: pclk_cif1_out {
 				compatible = "rockchip,rk-fixed-clock";
 				clock-output-names = "pclk_cif1_out";
-				clock-frequency = <0>;
+				clock-frequency = <150000000>;
 				#clock-cells = <0>;
 			};
 
 			pclk_cif2_out: pclk_cif2_out {
 				compatible = "rockchip,rk-fixed-clock";
 				clock-output-names = "pclk_cif2_out";
-				clock-frequency = <0>;
+				clock-frequency = <150000000>;
 				#clock-cells = <0>;
 			};
 
 			pclk_cif3_out: pclk_cif3_out {
 				compatible = "rockchip,rk-fixed-clock";
 				clock-output-names = "pclk_cif3_out";
-				clock-frequency = <0>;
+				clock-frequency = <150000000>;
 				#clock-cells = <0>;
 			};
 
 			io_cvbs_clkin: io_cvbs_clkin {
 				compatible = "rockchip,rk-fixed-clock";
 				clock-output-names = "io_cvbs_clkin";
-				clock-frequency = <0>;
+				clock-frequency = <54000000>;
 				#clock-cells = <0>;
 			};
 
@@ -294,6 +294,7 @@
 						#clock-cells = <0>;
 						#clock-init-cells = <1>;
 						rockchip,clkops-idx = <CLKOPS_RATE_MUX_DIV>;
+						rockchip,flags = <CLK_SET_RATE_PARENT_IN_ORDER>;
 					};
 
 					/* 7:5 reserved */
@@ -586,6 +587,7 @@
 						clocks = <&clk_crypto>;
 						clock-output-names = "clk_crypto";
 						rockchip,div-type = <CLK_DIVIDER_PLUS_ONE>;
+						rockchip,clkops-idx = <CLKOPS_RATE_MUX_DIV>;
 						#clock-cells = <0>;
 						#clock-init-cells = <1>;
 					};
@@ -598,6 +600,7 @@
 						clocks = <&dummy>, <&clk_gpll>;
 						clock-output-names = "clk_crypto";
 						#clock-cells = <0>;
+						#clock-init-cells = <1>;
 					};
 
 					clk_spi_div: clk_spi_div {
@@ -1037,6 +1040,7 @@
 						rockchip,div-type = <CLK_DIVIDER_PLUS_ONE>;
 						#clock-cells = <0>;
 						rockchip,clkops-idx = <CLKOPS_RATE_MUX_DIV>;
+						rockchip,flags = <CLK_SET_RATE_PARENT_IN_ORDER>;
 					};
 
 					/* 7:5 reserved */
@@ -1044,7 +1048,7 @@
 					clk_mac: clk_mac_mux {
 						compatible = "rockchip,rk3188-mux-con";
 						rockchip,bits = <8 1>;
-						clocks = <&gmac_clkin>, <&clk_mac_pll_div>;
+						clocks = <&clk_mac_pll_div>, <&gmac_clkin>;
 						clock-output-names = "clk_mac";
 						#clock-cells = <0>;
 						rockchip,flags = <CLK_SET_RATE_PARENT>;
@@ -1078,6 +1082,7 @@
 						rockchip,div-type = <CLK_DIVIDER_PLUS_ONE>;
 						#clock-cells = <0>;
 						rockchip,clkops-idx = <CLKOPS_RATE_MUX_DIV>;
+						rockchip,flags = <CLK_SET_RATE_PARENT_IN_ORDER>;
 					};
 
 					clk_sdmmc: clk_sdmmc_mux {
@@ -1094,6 +1099,7 @@
 						clocks = <&dummy>, <&clk_gpll>, <&xin24m>, <&usb480m>;
 						clock-output-names = "clk_sdio";
 						#clock-cells = <0>;
+						#clock-init-cells = <1>;
 					};
 
 					clk_emmc: clk_emmc_mux {
@@ -1102,6 +1108,7 @@
 						clocks = <&dummy>, <&clk_gpll>, <&xin24m>, <&usb480m>;
 						clock-output-names = "clk_emmc";
 						#clock-cells = <0>;
+						#clock-init-cells = <1>;
 					};
 
 					/* 15:14 reserved */
@@ -1121,6 +1128,7 @@
 						rockchip,div-type = <CLK_DIVIDER_PLUS_ONE>;
 						#clock-cells = <0>;
 						rockchip,clkops-idx = <CLKOPS_RATE_MUX_DIV>;
+						rockchip,flags = <CLK_SET_RATE_PARENT_IN_ORDER>;
 					};
 
 					clk_emmc_div: clk_emmc_div {
@@ -1131,6 +1139,7 @@
 						rockchip,div-type = <CLK_DIVIDER_PLUS_ONE>;
 						#clock-cells = <0>;
 						rockchip,clkops-idx = <CLKOPS_RATE_MUX_DIV>;
+						rockchip,flags = <CLK_SET_RATE_PARENT_IN_ORDER>;
 					};
 				};
 
@@ -1176,6 +1185,7 @@
 						clocks = <&dummy>, <&clk_gpll>;
 						clock-output-names = "clk_nandc";
 						#clock-cells = <0>;
+						#clock-init-cells = <1>;
 					};
 
 					/* 15 reserved */
@@ -1195,6 +1205,7 @@
 						rockchip,div-type = <CLK_DIVIDER_PLUS_ONE>;
 						#clock-cells = <0>;
 						rockchip,clkops-idx = <CLKOPS_RATE_MUX_DIV>;
+						rockchip,flags = <CLK_SET_RATE_PARENT_IN_ORDER>;
 						#clock-init-cells = <1>;
 					};
 
@@ -1217,6 +1228,7 @@
 						rockchip,div-type = <CLK_DIVIDER_PLUS_ONE>;
 						#clock-cells = <0>;
 						rockchip,clkops-idx = <CLKOPS_RATE_MUX_DIV>;
+						rockchip,flags = <CLK_SET_RATE_PARENT_IN_ORDER>;
 						#clock-init-cells = <1>;
 					};
 
@@ -1281,6 +1293,7 @@
 						rockchip,div-type = <CLK_DIVIDER_PLUS_ONE>;
 						#clock-cells = <0>;
 						rockchip,clkops-idx = <CLKOPS_RATE_MUX_DIV>;
+						rockchip,flags = <CLK_SET_RATE_PARENT_IN_ORDER>;
 					};
 
 					/* 13 reserved */
@@ -1357,21 +1370,20 @@
 					#address-cells = <1>;
 					#size-cells = <1>;
 
-					dclk_vop_div: dclk_vop_div {
+					dclk_vop: dclk_vop_div {
 						compatible = "rockchip,rk3188-div-con";
 						rockchip,bits = <0 6>;
-						clocks = <&dclk_vop>;
+						clocks = <&dclk_vop_pll>;
 						clock-output-names = "dclk_vop";
 						rockchip,div-type = <CLK_DIVIDER_PLUS_ONE>;
 						#clock-cells = <0>;
-						rockchip,clkops-idx = <CLKOPS_RATE_MUX_DIV>;
 					};
 
-					dclk_vop: dclk_vop_mux {
+					dclk_vop_pll: dclk_vop_pll_mux {
 						compatible = "rockchip,rk3188-mux-con";
 						rockchip,bits = <6 1>;
-						clocks = <&hdmiphy>, <&hdmiphy>, <&clk_gpll>, <&dummy>;
-						clock-output-names = "dclk_vop";
+						clocks = <&clk_gpll>, <&dummy>;
+						clock-output-names = "dclk_vop_pll";
 						#clock-cells = <0>;
 						#clock-init-cells = <1>;
 					};
@@ -1379,8 +1391,9 @@
 					dclk_lcdc: dclk_lcdc_mux {
 						compatible = "rockchip,rk3188-mux-con";
 						rockchip,bits = <7 1>;
-						clocks = <&dclk_vop_div>, <&dclk_lcdc_pll>;
+						clocks = <&dclk_lcdc_pll>, <&dclk_vop>;
 						clock-output-names = "dclk_lcdc";
+						rockchip,flags = <CLK_SET_RATE_PARENT>;
 						#clock-cells = <0>;
 						#clock-init-cells = <1>;
 					};
@@ -1388,11 +1401,10 @@
 					dclk_hdmiphy: dclk_hdmiphy_div {
 						compatible = "rockchip,rk3188-div-con";
 						rockchip,bits = <8 6>;
-						clocks = <&dclk_vop>;
+						clocks = <&dclk_vop_pll>;
 						clock-output-names = "dclk_hdmiphy";
 						rockchip,div-type = <CLK_DIVIDER_PLUS_ONE>;
 						#clock-cells = <0>;
-						rockchip,clkops-idx = <CLKOPS_RATE_MUX_DIV>;
 					};
 
 					/* 14 reserved */
@@ -1421,6 +1433,7 @@
 						rockchip,div-type = <CLK_DIVIDER_PLUS_ONE>;
 						#clock-cells = <0>;
 						rockchip,clkops-idx = <CLKOPS_RATE_MUX_DIV>;
+						rockchip,flags = <CLK_SET_RATE_PARENT_IN_ORDER>;
 						#clock-init-cells = <1>;
 					};
 
@@ -1445,6 +1458,8 @@
 						rockchip,div-type = <CLK_DIVIDER_PLUS_ONE>;
 						#clock-cells = <0>;
 						rockchip,clkops-idx = <CLKOPS_RATE_MUX_DIV>;
+						rockchip,flags = <(CLK_SET_RATE_PARENT_IN_ORDER |
+								  CLK_SET_RATE_NO_REPARENT)>;
 					};
 
 					clk_cvbs_host: clk_cvbs_host_mux {
@@ -1520,6 +1535,7 @@
 						rockchip,div-type = <CLK_DIVIDER_PLUS_ONE>;
 						#clock-cells = <0>;
 						rockchip,clkops-idx = <CLKOPS_RATE_MUX_DIV>;
+						rockchip,flags = <CLK_SET_RATE_PARENT_IN_ORDER>;
 					};
 
 					/* 13 reserved */
@@ -1548,6 +1564,7 @@
 						rockchip,div-type = <CLK_DIVIDER_PLUS_ONE>;
 						#clock-cells = <0>;
 						rockchip,clkops-idx = <CLKOPS_RATE_MUX_DIV>;
+						rockchip,flags = <CLK_SET_RATE_PARENT_IN_ORDER>;
 						#clock-init-cells = <1>;
 					};
 
@@ -1622,6 +1639,7 @@
 						rockchip,div-type = <CLK_DIVIDER_PLUS_ONE>;
 						#clock-cells = <0>;
 						rockchip,clkops-idx = <CLKOPS_RATE_MUX_DIV>;
+						rockchip,flags = <CLK_SET_RATE_PARENT_IN_ORDER>;
 					};
 
 					/* 13 reserved */
@@ -1791,11 +1809,11 @@
 					#address-cells = <1>;
 					#size-cells = <1>;
 
-					clk_ceva_pfm: clk_ceva_pfm_div {
+					clk_dsp_pfm: clk_dsp_pfm_div {
 						compatible = "rockchip,rk3188-div-con";
 						rockchip,bits = <0 5>;
 						clocks = <&clk_dsp_div>;
-						clock-output-names = "clk_ceva_pfm";
+						clock-output-names = "clk_dsp_pfm";
 						rockchip,div-type = <CLK_DIVIDER_PLUS_ONE>;
 						#clock-cells = <0>;
 						rockchip,clkops-idx =
@@ -1895,7 +1913,7 @@
 					clk_test_mux: clk_test_mux {
 						compatible = "rockchip,rk3188-mux-con";
 						rockchip,bits = <8 4>;
-						clocks = <&clk_core>, <&aclk_bus_pre>, <&aclk_vio0_pre>, <&aclk_vio1_pre>, <&aclk_peri>, <&clk_ceva_pfm>, <&aclk_rkvdec_pre>, <&aclk_rkvenc_pre>, <&xin24m>, <&clk_ddr_div>, <&dclk_lcdc>, <&clk_wifi>, <&clk_rga>, <&clk_isp>, <&aclk_vpu_pre>, <&clk_venc_core>;
+						clocks = <&clk_core>, <&aclk_bus_pre>, <&aclk_vio0_pre>, <&aclk_vio1_pre>, <&aclk_peri>, <&clk_dsp_pfm>, <&aclk_rkvdec_pre>, <&aclk_rkvenc_pre>, <&xin24m>, <&clk_ddr_div>, <&dclk_lcdc>, <&clk_wifi>, <&clk_rga>, <&clk_isp>, <&aclk_vpu_pre>, <&clk_venc_core>;
 						clock-output-names = "clk_test_mux";
 						#clock-cells = <0>;
 					};
@@ -1906,8 +1924,9 @@
 						compatible = "rockchip,rk3188-mux-con";
 						rockchip,bits = <13 1>;
 						clocks = <&hdmiphy_pll>, <&xin24m>;
-						clock-output-names = "hdmiphy_pll";
+						clock-output-names = "hdmiphy";
 						#clock-cells = <0>;
+						#clock-init-cells = <1>;
 					};
 
 					/* 14 reserved */
@@ -1918,6 +1937,7 @@
 						clocks = <&usbphy_480m>, <&xin24m>;
 						clock-output-names = "usb480m";
 						#clock-cells = <0>;
+						#clock-init-cells = <1>;
 					};
 				};
 			};
@@ -2124,7 +2144,7 @@
 					compatible = "rockchip,rk3188-gate-clk";
 					reg = <0x0138 0x4>;
 					clocks =
-					<&aclk_vio0_pre>,	<&aclk_vio1_pre>,
+					<&dummy>,	<&dummy>,
 					<&dummy>,	<&clk_isp>,
 
 					<&dummy>,	<&dclk_vop>,
@@ -2137,7 +2157,7 @@
 					<&dummy>,	<&dummy>;
 
 					clock-output-names =
-					"aclk_vio0_pre",	"aclk_vio1_pre",
+					"reserved",	"reserved",
 					"reserved",	"clk_isp",
 
 					"reserved",	"dclk_vop",
@@ -2157,7 +2177,7 @@
 					reg = <0x013c 0x4>;
 					clocks =
 					<&dummy>,	<&dummy>,
-					<&aclk_vio0_pre>,	<&aclk_vio0_pre>,
+					<&dummy>,	<&dummy>,
 
 					<&dummy>,	<&dummy>,
 					<&pclkin_vip>,	<&dummy>,
@@ -2170,7 +2190,7 @@
 
 					clock-output-names =
 					"reserved",	"reserved",
-					"hclk_vio_pre",	"pclk_vio_pre",
+					"reserved",	"reserved",
 
 					"reserved",	"reserved",
 					"pclk_isp_pre",	"reserved",
@@ -2188,27 +2208,27 @@
 					compatible = "rockchip,rk3188-gate-clk";
 					reg = <0x0140 0x4>;
 					clocks =
-					<&aclk_rkvdec_pre>,	<&clk_hevc_cabac>,
-					<&clk_hevc_core>,	<&aclk_vpu_pre>,
+					<&dummy>,	<&dummy>,
+					<&clk_hevc_core>,	<&dummy>,
 
-					<&hclk_rkvdec_pre>,	<&dummy>,
+					<&dummy>,	<&dummy>,
 					<&dummy>,	<&dummy>,
 
-					<&aclk_rkvenc_pre>,	<&clk_venc_core>,
-					<&hclk_rkvenc_pre>,	<&dummy>,
+					<&dummy>,	<&clk_venc_core>,
+					<&dummy>,	<&dummy>,
 
 					<&pclk_pmu_pre>,	<&xin24m>,
 					<&clk_i2c0>,	<&clk_pwm0>;
 
 					clock-output-names =
-					"aclk_rkvdec_pre",	"clk_hevc_cabac",
-					"clk_hevc_core",	"aclk_vpu_pre",
+					"reserved",	"reserved",
+					"clk_hevc_core",	"reserved",
 
-					"hclk_rkvdec_pre",	"reserved",
+					"reserved",	"reserved",
 					"reserved",	"reserved",
 
-					"aclk_rkvenc_pre",	"clk_venc_core",
-					"hclk_rkvenc_pre",	"reserved",
+					"reserved",	"clk_venc_core",
+					"reserved",	"reserved",
 
 					"pclk_pmu_pre",	"clk_pvtm_pmu",
 					"clk_i2c0",	"clk_pwm0";
@@ -2224,7 +2244,7 @@
 					<&clk_dsp_epp>,	<&clk_dsp_edp>,
 
 					<&clk_dsp_edap>,	<&pclk_dsp_cfg>,
-					<&clk_ceva_pfm>,	<&dummy>,
+					<&clk_dsp_pfm>,	<&dummy>,
 
 					<&clk_wifi>,	<&clk_test>,
 					<&xin24m>,	<&clk_cif_out>,
@@ -2237,7 +2257,7 @@
 					"clk_dsp_epp",	"clk_dsp_edp",
 
 					"clk_dsp_edap",	"pclk_dsp_cfg",
-					"clk_ceva_pfm",	"reserved",
+					"clk_dsp_pfm",	"reserved",
 
 					"clk_wifi",	"clk_test",
 					"clk_dsiphy_24m",	"clk_cif_out",
@@ -2290,7 +2310,7 @@
 					<&dummy>,	<&dummy>,
 					<&dummy>,	<&dummy>,
 
-					<&clk_dsp_edp>,	<&dummy>,
+					<&dummy>,	<&dummy>,
 					<&dummy>,	<&dummy>,
 
 					<&dummy>,	<&dummy>,
@@ -2447,26 +2467,26 @@
 					<&clk_dsp>,	<&clk_dsp>,
 					<&clk_dsp>,	<&clk_dsp>,
 
-					<&clk_dsp_iop>,	<&clk_dsp_epp>,
-					<&clk_dsp_edp>,	<&clk_dsp>,
+					<&dummy>,	<&dummy>,
+					<&dummy>,	<&clk_dsp>,
 
 					<&pclk_dsp_cfg>,	<&pclk_dsp_cfg>,
 					<&pclk_dsp_cfg>,	<&pclk_dsp_cfg>,
 
 					<&pclk_dsp_cfg>,	<&clk_dsp>,
-					<&clk_dsp_edap>,	<&clk_dsp_epp>;
+					<&dummy>,	<&dummy>;
 
 					clock-output-names =
-					"clk_ceva_sys_wd",	"clk_ceva_epp_wd",
-					"clk_ceva_edp_wd",	"clk_ceva_iop_wd",
+					"clk_dsp_sys_wd",	"clk_dsp_epp_wd",
+					"clk_dsp_edp_wd",	"clk_dsp_iop_wd",
 
 					"p_dsp_iop_niu",	"p_dsp_epp_niu",
 					"a_dsp_edp_niu",	"p_dsp_dbg_niu",
 
-					"p_dsp_cfg_niu",	"p_ceva_pfm_mon",
+					"p_dsp_cfg_niu",	"p_dsp_pfm_mon",
 					"pclk_intc",	"pclk_dsp_grf",
 
-					"pclk_mailbox",	"clk_cevaxm4_fe",
+					"pclk_mailbox",	"clk_dsp_free",
 					"a_dsp_edap_niu",	"a_dsp_epp_perf";
 
 					#clock-cells = <1>;
@@ -2477,7 +2497,7 @@
 					reg = <0x0164 0x4>;
 					clocks =
 					<&aclk_vio0_pre>,	<&aclk_vio1_pre>,
-					<&hclk_vio_pre>,	<&pclk_vio_pre>,
+					<&aclk_vio0_pre>,	<&aclk_vio1_pre>,
 
 					<&dummy>,	<&dummy>,
 					<&aclk_vio1_pre>,	<&hclk_vio_pre>,
@@ -2489,8 +2509,8 @@
 					<&dummy>,	<&dummy>;
 
 					clock-output-names =
-					"aclk_vio0",	"aclk_vio1",
-					"hclk_vio",	"pclk_vio",
+					"aclk_vio0_pre",	"aclk_vio1_pre",
+					"hclk_vio_pre",	"pclk_vio_pre",
 
 					"reserved",	"reserved",
 					"aclk_cif1",	"hclk_cif1",
@@ -2543,23 +2563,23 @@
 					<&aclk_rkvdec_pre>,	<&aclk_vpu_pre>,
 					<&hclk_rkvdec_pre>,	<&hclk_rkvdec_pre>,
 
-					<&aclk_rkvdec_pre>,	<&hclk_rkvdec_pre>,
-					<&aclk_vpu_pre>,	<&dummy>,
+					<&dummy>,	<&dummy>,
+					<&dummy>,	<&dummy>,
 
 					<&aclk_rkvenc_pre>,	<&hclk_rkvenc_pre>,
-					<&aclk_rkvenc_pre>,	<&hclk_rkvenc_pre>,
+					<&dummy>,	<&dummy>,
 
 					<&dummy>,	<&dummy>,
 					<&dummy>,	<&dummy>;
 
 					clock-output-names =
-					"aclk_rkvdec",	"aclk_vpu",
-					"hclk_rkvdec",	"hclk_vpu",
+					"aclk_rkvdec_pre",	"aclk_vpu_pre",
+					"hclk_rkvdec_pre",	"hclk_vpu",
 
 					"aclk_rkvdec_niu",	"hclk_rkvdec_niu",
 					"aclk_vpu_niu",	"reserved",
 
-					"aclk_rkvenc",	"hclk_rkvenc",
+					"aclk_rkvenc_pre",	"hclk_rkvenc_pre",
 					"aclk_rkvenc_niu",	"hclk_rkvenc_niu",
 
 					"reserved",	"reserved",

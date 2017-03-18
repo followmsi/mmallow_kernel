@@ -114,7 +114,8 @@ enum {
 	RK3288_GMAC,
 	RK312X_GMAC,
 	RK3368_GMAC,
-	RK322X_GMAC
+	RK322X_GMAC,
+	RK1108_GMAC
 };
 
 struct bsp_priv {
@@ -137,10 +138,12 @@ struct bsp_priv {
 	struct delayed_work led_work;
 	int led_active;
 	unsigned long led_next_time;
+	struct delayed_work resume_work;
+	int link;
 	int phy_iface;
 	bool clock_input;
 	bool internal_phy;
-	int chip;
+	unsigned long chip;
 	int tx_delay;
 	int rx_delay;
 

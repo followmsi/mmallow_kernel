@@ -385,6 +385,10 @@ struct vpu_service_info {
 	struct clk *clk_cabac;
 	struct clk *pd_video;
 
+	unsigned long aclk_vcodec_default_rate;
+	unsigned long clk_core_default_rate;
+	unsigned long clk_cabac_default_rate;
+
 #ifdef CONFIG_RESET_CONTROLLER
 	struct reset_control *rst_a;
 	struct reset_control *rst_h;
@@ -482,8 +486,9 @@ static void vcodec_enter_mode(struct vpu_subdev_data *data)
 	int bits;
 	u32 raw = 0;
 	struct vpu_service_info *pservice = data->pservice;
+#if defined(CONFIG_VCODEC_MMU)
 	struct vpu_subdev_data *subdata, *n;
-
+#endif
 	if (pservice->subcnt < 2) {
 #if defined(CONFIG_VCODEC_MMU)
 		if (data->mmu_dev && !test_bit(MMU_ACTIVATED, &data->state)) {
@@ -567,11 +572,18 @@ static void vcodec_enter_mode(struct vpu_subdev_data *data)
 
 static void vcodec_exit_mode(struct vpu_subdev_data *data)
 {
+#if defined(CONFIG_VCODEC_MMU)
 	if (data->mmu_dev && test_bit(MMU_ACTIVATED, &data->state)) {
 		clear_bit(MMU_ACTIVATED, &data->state);
 		rockchip_iovmm_deactivate(data->dev);
-		data->pservice->curr_mode = VCODEC_RUNNING_MODE_NONE;
 	}
+#endif
+	/*
+	 * In case of VPU Combo, it require HW switch its running mode
+	 * before the other HW component start work. set current HW running
+	 * mode to none, can ensure HW switch to its reqired mode properly.
+	 */
+	data->pservice->curr_mode = VCODEC_RUNNING_MODE_NONE;
 }
 
 static int vpu_get_clk(struct vpu_service_info *pservice)
@@ -592,17 +604,27 @@ static int vpu_get_clk(struct vpu_service_info *pservice)
 		if (IS_ERR(pservice->clk_cabac)) {
 			dev_err(dev, "failed on clk_get clk_cabac\n");
 			pservice->clk_cabac = NULL;
+		} else {
+			pservice->clk_cabac_default_rate =
+				clk_get_rate(pservice->clk_cabac);
 		}
+
 		pservice->clk_core = devm_clk_get(dev, "clk_core");
 		if (IS_ERR(pservice->clk_core)) {
 			dev_err(dev, "failed on clk_get clk_core\n");
 			return -1;
+		} else {
+			pservice->clk_core_default_rate =
+				clk_get_rate(pservice->clk_core);
 		}
 	case VCODEC_DEVICE_ID_VPU:
 		pservice->aclk_vcodec = devm_clk_get(dev, "aclk_vcodec");
 		if (IS_ERR(pservice->aclk_vcodec)) {
 			dev_err(dev, "failed on clk_get aclk_vcodec\n");
 			return -1;
+		} else {
+			pservice->aclk_vcodec_default_rate =
+				clk_get_rate(pservice->aclk_vcodec);
 		}
 
 		pservice->hclk_vcodec = devm_clk_get(dev, "hclk_vcodec");
@@ -763,9 +785,10 @@ static void set_div_clk(struct clk *clock, int divide)
 static void vpu_service_power_off(struct vpu_service_info *pservice)
 {
 	int total_running;
-	struct vpu_subdev_data *data = NULL, *n;
 	int ret = atomic_add_unless(&pservice->enabled, -1, 0);
-
+#if defined(CONFIG_VCODEC_MMU)
+	struct vpu_subdev_data *data = NULL, *n;
+#endif
 	if (!ret)
 		return;
 
@@ -2051,28 +2074,6 @@ static irqreturn_t vepu_irq(int irq, void *dev_id);
 static irqreturn_t vepu_isr(int irq, void *dev_id);
 static void get_hw_info(struct vpu_subdev_data *data);
 
-static struct device *rockchip_get_sysmmu_dev(const char *compt)
-{
-	struct device_node *dn = NULL;
-	struct platform_device *pd = NULL;
-	struct device *ret = NULL;
-
-	dn = of_find_compatible_node(NULL, NULL, compt);
-	if (!dn) {
-		pr_err("can't find device node %s \r\n", compt);
-		return NULL;
-	}
-
-	pd = of_find_device_by_node(dn);
-	if (!pd) {
-		pr_err("can't find platform device in device node %s\n", compt);
-		return  NULL;
-	}
-	ret = &pd->dev;
-
-	return ret;
-}
-
 #ifdef CONFIG_IOMMU_API
 static inline void platform_set_sysmmu(struct device *iommu,
 				       struct device *dev)
@@ -2086,6 +2087,7 @@ static inline void platform_set_sysmmu(struct device *iommu,
 }
 #endif
 
+#if defined(CONFIG_VCODEC_MMU)
 int vcodec_sysmmu_fault_hdl(struct device *dev,
 			    enum rk_iommu_inttype itype,
 			    unsigned long pgtable_base,
@@ -2157,6 +2159,29 @@ int vcodec_sysmmu_fault_hdl(struct device *dev,
 
 	return 0;
 }
+
+static struct device *rockchip_get_sysmmu_dev(const char *compt)
+{
+	struct device_node *dn = NULL;
+	struct platform_device *pd = NULL;
+	struct device *ret = NULL;
+
+	dn = of_find_compatible_node(NULL, NULL, compt);
+	if (!dn) {
+		pr_err("can't find device node %s \r\n", compt);
+		return NULL;
+	}
+
+	pd = of_find_device_by_node(dn);
+	if (!pd) {
+		pr_err("can't find platform device in device node %s\n", compt);
+		return  NULL;
+	}
+	ret = &pd->dev;
+
+	return ret;
+}
+#endif
 
 /* special hw ops */
 static void vcodec_power_on_default(struct vpu_service_info *pservice)
@@ -2235,8 +2260,11 @@ static void vcodec_get_reg_freq_default(struct vpu_subdev_data *data,
 {
 	if (reg->type == VPU_DEC || reg->type == VPU_DEC_PP) {
 		if (reg_check_fmt(reg) == VPU_DEC_FMT_H264) {
-			if (reg_probe_width(reg) > 3200) {
-				/*raise frequency for 4k avc.*/
+			if (reg_probe_width(reg) > 2560) {
+				/*
+				 * raise frequency for resolution larger
+				 * than 1440p avc.
+				 */
 				reg->freq = VPU_FREQ_600M;
 			}
 		} else {
@@ -2281,6 +2309,8 @@ static void vcodec_set_freq_default(struct vpu_service_info *pservice,
 		clk_set_rate(pservice->aclk_vcodec, 600*MHZ);
 	} break;
 	default: {
+		clk_set_rate(pservice->aclk_vcodec,
+			     pservice->aclk_vcodec_default_rate);
 		break;
 	}
 	}
@@ -2371,7 +2401,6 @@ static int vcodec_subdev_probe(struct platform_device *pdev,
 	struct vpu_subdev_data *data =
 		devm_kzalloc(dev, sizeof(struct vpu_subdev_data), GFP_KERNEL);
 	u32 iommu_en = 0;
-	char mmu_dev_dts_name[40];
 
 	of_property_read_u32(np, "iommu_enabled", &iommu_en);
 
@@ -2451,7 +2480,10 @@ static int vcodec_subdev_probe(struct platform_device *pdev,
 	atomic_set(&data->enc_dev.irq_count_codec, 0);
 	atomic_set(&data->enc_dev.irq_count_pp, 0);
 
+#if defined(CONFIG_VCODEC_MMU)
 	if (iommu_en) {
+		char mmu_dev_dts_name[40];
+
 		if (data->mode == VCODEC_RUNNING_MODE_HEVC)
 			sprintf(mmu_dev_dts_name,
 				HEVC_IOMMU_COMPATIBLE_NAME);
@@ -2472,6 +2504,7 @@ static int vcodec_subdev_probe(struct platform_device *pdev,
 
 		rockchip_iovmm_set_fault_handler(dev, vcodec_sysmmu_fault_hdl);
 	}
+#endif
 
 	get_hw_info(data);
 	pservice->auto_freq = true;
@@ -2865,7 +2898,7 @@ static irqreturn_t vdpu_irq(int irq, void *dev_id)
 			writel(0x100000, dev->regs + task->reg_irq);
 
 		/* set clock gating to save power */
-		writel(task->gating_mask, dev->regs + task->reg_irq);
+		writel(task->gating_mask, dev->regs + task->reg_en);
 
 		atomic_add(1, &dev->irq_count_codec);
 		time_diff(task);

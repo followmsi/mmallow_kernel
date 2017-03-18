@@ -54,7 +54,17 @@ config RK_VCODEC
 	depends on ARCH_ROCKCHIP
 	default y
 
+config RK_DSP
+	tristate "Rockchip DSP driver for in kernel"
+	depends on ARCH_ROCKCHIP
+	default n
+	help
+	  Support DSP driver
+
 config RK_PL330_DMA_TEST
 	bool "pl330 DMA memcpy test"
+
+config RK_SLT_DMA
+	bool "pl330 DMA memcpy test for slt"
 
 endif

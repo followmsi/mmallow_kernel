@@ -255,6 +255,7 @@
 						#clock-cells = <0>;
 						#clock-init-cells = <1>;
 						rockchip,clkops-idx = <CLKOPS_RATE_MUX_DIV>;
+						rockchip,flags = <CLK_SET_RATE_PARENT_IN_ORDER>;
 					};
 
 					aclk_bus_mux: aclk_bus_mux {
@@ -351,6 +352,7 @@
 						#clock-cells = <0>;
 						rockchip,clkops-idx =
 							<CLKOPS_RATE_MUX_DIV>;
+						rockchip,flags = <CLK_SET_RATE_PARENT_IN_ORDER>;
 					};
 
 					/* 13: reserved */
@@ -383,7 +385,7 @@
 						#clock-cells = <0>;
 						rockchip,clkops-idx =
 							<CLKOPS_RATE_MUX_DIV>;
-						rockchip,flags = <CLK_SET_RATE_NO_REPARENT>;
+						rockchip,flags = <(CLK_SET_RATE_NO_REPARENT | CLK_SET_RATE_PARENT_IN_ORDER)>;
 					};
 
 					/* 7: reserved */
@@ -468,6 +470,7 @@
 						rockchip,div-type = <CLK_DIVIDER_PLUS_ONE>;
 						#clock-cells = <0>;
 						rockchip,clkops-idx = <CLKOPS_RATE_MUX_DIV>;
+						rockchip,flags = <CLK_SET_RATE_PARENT_IN_ORDER>;
 					};
 
 					clk_mac: clk_mac_mux {
@@ -499,6 +502,7 @@
 						#clock-cells = <0>;
 						rockchip,clkops-idx =
 							<CLKOPS_RATE_MUX_DIV>;
+						rockchip,flags = <CLK_SET_RATE_PARENT_IN_ORDER>;
 					};
 
 					/* 14:13 reserved */
@@ -529,7 +533,7 @@
 						#clock-cells = <0>;
 						rockchip,clkops-idx =
 							<CLKOPS_RATE_MUX_DIV>;
-						rockchip,flags = <CLK_SET_RATE_NO_REPARENT>;
+						rockchip,flags = <(CLK_SET_RATE_NO_REPARENT | CLK_SET_RATE_PARENT_IN_ORDER)>;
 					};
 
 					/* 7 reserved */
@@ -611,7 +615,7 @@
 						#clock-cells = <0>;
 						rockchip,clkops-idx =
 							<CLKOPS_RATE_MUX_DIV>;
-						rockchip,flags = <CLK_SET_RATE_NO_REPARENT>;
+						rockchip,flags = <(CLK_SET_RATE_NO_REPARENT | CLK_SET_RATE_PARENT_IN_ORDER)>;
 					};
 
 					/* 7: reserved */
@@ -654,6 +658,7 @@
 						rockchip,div-type = <CLK_DIVIDER_PLUS_ONE>;
 						#clock-cells = <0>;
 						rockchip,clkops-idx = <CLKOPS_RATE_MUX_DIV>;
+						rockchip,flags = <CLK_SET_RATE_PARENT_IN_ORDER>;
 					};
 
 					/* 7:5: reserved */
@@ -715,6 +720,7 @@
 						#clock-cells = <0>;
 						rockchip,clkops-idx =
 							<CLKOPS_RATE_MUX_EVENDIV>;
+						rockchip,flags = <CLK_SET_RATE_PARENT_IN_ORDER>;
 					};
 
 					clk_sdmmc0: clk_sdmmc0_mux {
@@ -763,6 +769,7 @@
 						#clock-cells = <0>;
 						rockchip,clkops-idx =
 							<CLKOPS_RATE_MUX_EVENDIV>;
+						rockchip,flags = <CLK_SET_RATE_PARENT_IN_ORDER>;
 					};
 
 					clk_emmc_div: clk_emmc_div {
@@ -774,6 +781,7 @@
 						#clock-cells = <0>;
 						rockchip,clkops-idx =
 							<CLKOPS_RATE_MUX_EVENDIV>;
+						rockchip,flags = <CLK_SET_RATE_PARENT_IN_ORDER>;
 					};
 
 				};
@@ -791,6 +799,7 @@
 						clock-output-names = "clk_uart0_pll";
 						rockchip,div-type = <CLK_DIVIDER_PLUS_ONE>;
 						#clock-cells = <0>;
+						rockchip,flags = <CLK_SET_RATE_PARENT_IN_ORDER>;
 					};
 
 					/* 7 reserved */
@@ -834,6 +843,7 @@
 						clock-output-names = "clk_uart1_pll";
 						rockchip,div-type = <CLK_DIVIDER_PLUS_ONE>;
 						#clock-cells = <0>;
+						rockchip,flags = <CLK_SET_RATE_PARENT_IN_ORDER>;
 					};
 
 					/* 7 reserved */
@@ -876,6 +886,7 @@
 						clock-output-names = "clk_uart2_pll";
 						rockchip,div-type = <CLK_DIVIDER_PLUS_ONE>;
 						#clock-cells = <0>;
+						rockchip,flags = <CLK_SET_RATE_PARENT_IN_ORDER>;
 					};
 
 					/* 7 reserved */
@@ -921,7 +932,7 @@
 						#clock-cells = <0>;
 						rockchip,clkops-idx =
 							<CLKOPS_RATE_MUX_DIV>;
-						rockchip,flags = <CLK_SET_RATE_NO_REPARENT>;
+						rockchip,flags = <(CLK_SET_RATE_NO_REPARENT | CLK_SET_RATE_PARENT_IN_ORDER)>;
 					};
 
 					/* 7: reserved */
@@ -1076,6 +1087,7 @@
 						rockchip,div-type = <CLK_DIVIDER_PLUS_ONE>;
 						#clock-cells = <0>;
 						rockchip,clkops-idx = <CLKOPS_RATE_MUX_DIV>;
+						rockchip,flags = <CLK_SET_RATE_PARENT_IN_ORDER>;
 					};
 
 					/* 7:0 reserved */
@@ -1088,6 +1100,7 @@
 						rockchip,div-type = <CLK_DIVIDER_PLUS_ONE>;
 						#clock-cells = <0>;
 						rockchip,clkops-idx = <CLKOPS_RATE_MUX_DIV>;
+						rockchip,flags = <CLK_SET_RATE_PARENT_IN_ORDER>;
 					};
 
 					/* 14:13 reserved */
@@ -1116,6 +1129,7 @@
 						rockchip,div-type = <CLK_DIVIDER_PLUS_ONE>;
 						#clock-cells = <0>;
 						rockchip,clkops-idx = <CLKOPS_RATE_MUX_DIV>;
+						rockchip,flags = <CLK_SET_RATE_PARENT_IN_ORDER>;
 					};
 
 					clk_wifi: clk_wifi_mux {
@@ -1136,6 +1150,7 @@
 						rockchip,div-type = <CLK_DIVIDER_PLUS_ONE>;
 						#clock-cells = <0>;
 						rockchip,clkops-idx = <CLKOPS_RATE_MUX_DIV>;
+						rockchip,flags = <CLK_SET_RATE_PARENT_IN_ORDER>;
 					};
 
 					clk_hdcp: clk_hdcp_mux {
@@ -1162,6 +1177,7 @@
 						rockchip,div-type = <CLK_DIVIDER_PLUS_ONE>;
 						#clock-cells = <0>;
 						#clock-init-cells = <1>;
+						rockchip,flags = <CLK_SET_RATE_PARENT_IN_ORDER>;
 					};
 
 					clk_crypto: clk_crypto_mux {
@@ -1198,6 +1214,7 @@
 						rockchip,div-type = <CLK_DIVIDER_PLUS_ONE>;
 						#clock-cells = <0>;
 						rockchip,clkops-idx = <CLKOPS_RATE_MUX_DIV>;
+						rockchip,flags = <CLK_SET_RATE_PARENT_IN_ORDER>;
 					};
 
 					/* 7 reserved */
@@ -1324,6 +1341,7 @@
 						rockchip,div-type = <CLK_DIVIDER_PLUS_ONE>;
 						#clock-cells = <0>;
 						rockchip,clkops-idx = <CLKOPS_RATE_MUX_DIV>;
+						rockchip,flags = <CLK_SET_RATE_PARENT_IN_ORDER>;
 					};
 
 					/* 13 reserved */
@@ -1429,6 +1447,7 @@
 						rockchip,div-type = <CLK_DIVIDER_PLUS_ONE>;
 						#clock-cells = <0>;
 						rockchip,clkops-idx = <CLKOPS_RATE_MUX_DIV>;
+						rockchip,flags = <CLK_SET_RATE_PARENT_IN_ORDER>;
 					};
 
 					aclk_iep: aclk_iep_mux {
@@ -1450,6 +1469,7 @@
 						rockchip,div-type = <CLK_DIVIDER_PLUS_ONE>;
 						#clock-cells = <0>;
 						rockchip,clkops-idx = <CLKOPS_RATE_MUX_DIV>;
+						rockchip,flags = <CLK_SET_RATE_PARENT_IN_ORDER>;
 					};
 
 					aclk_hdcp: aclk_hdcp_mux {
@@ -1477,6 +1497,7 @@
 						rockchip,div-type = <CLK_DIVIDER_PLUS_ONE>;
 						#clock-cells = <0>;
 						rockchip,clkops-idx = <CLKOPS_RATE_MUX_DIV>;
+						rockchip,flags = <CLK_SET_RATE_PARENT_IN_ORDER>;
 					};
 
 					aclk_vpu: aclk_vpu_mux {
@@ -1506,6 +1527,7 @@
 						rockchip,div-type = <CLK_DIVIDER_PLUS_ONE>;
 						#clock-cells = <0>;
 						rockchip,clkops-idx = <CLKOPS_RATE_MUX_DIV>;
+						rockchip,flags = <CLK_SET_RATE_PARENT_IN_ORDER>;
 					};
 
 					aclk_vop: aclk_vop_mux {
@@ -1527,6 +1549,7 @@
 						rockchip,div-type = <CLK_DIVIDER_PLUS_ONE>;
 						#clock-cells = <0>;
 						rockchip,clkops-idx = <CLKOPS_RATE_MUX_DIV>;
+						rockchip,flags = <CLK_SET_RATE_PARENT_IN_ORDER>;
 					};
 
 					aclk_rga: aclk_rga_mux {
@@ -1578,6 +1601,7 @@
 						rockchip,div-type = <CLK_DIVIDER_PLUS_ONE>;
 						#clock-cells = <0>;
 						rockchip,clkops-idx = <CLKOPS_RATE_MUX_DIV>;
+						rockchip,flags = <CLK_SET_RATE_PARENT_IN_ORDER>;
 					};
 
 					clk_vdec_core: clk_vdec_core_mux {

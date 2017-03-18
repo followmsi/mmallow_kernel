@@ -3,6 +3,8 @@
 #include <linux/gpio.h>
 #include <linux/regmap.h>
 #include <linux/reset.h>
+#include <linux/rockchip/iomap.h>
+#include <linux/rockchip/grf.h>
 #ifdef CONFIG_HAS_EARLYSUSPEND
 #include <linux/earlysuspend.h>
 #endif
@@ -41,6 +43,7 @@ struct hdmi_dev {
 	struct clk		*hdcp_clk;
 	struct clk		*cec_clk;
 	struct clk		*pclk_phy;
+	struct clk		*dclk_phy;
 	struct hdmi		*hdmi;
 	struct device		*dev;
 	struct dentry		*debugfs_dir;

@@ -225,7 +225,6 @@ static int rga2_buf_size_cal(unsigned long yrgb_addr, unsigned long uv_addr, uns
         case RGA2_FORMAT_YCbCr_420_SP_10B:
         case RGA2_FORMAT_YCrCb_420_SP_10B:
             stride = (w + 3) & (~3);
-            stride = stride * 10/8;
             size_yrgb = stride * h;
             size_uv = (stride * (h >> 1));
             start = MIN(yrgb_addr, uv_addr);
@@ -535,6 +534,11 @@ static int rga2_mmu_info_BitBlt_mode(struct rga2_reg *reg, struct rga2_req *req)
             v_size = (req->dst.v_addr - (DstStart << PAGE_SHIFT)) >> PAGE_SHIFT;
             req->dst.uv_addr = (req->dst.uv_addr & (~PAGE_MASK)) | ((uv_size) << PAGE_SHIFT);
             req->dst.v_addr = (req->dst.v_addr & (~PAGE_MASK)) | ((v_size) << PAGE_SHIFT);
+
+	    if (((req->alpha_rop_flag & 1) == 1) && (req->bitblt_mode == 0)) {
+		req->mmu_info.src1_base_addr = req->mmu_info.dst_base_addr;
+		req->mmu_info.src1_mmu_flag  = req->mmu_info.dst_mmu_flag;
+	    }
         }
 
         /* flush data to DDR */

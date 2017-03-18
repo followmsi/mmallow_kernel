@@ -291,14 +291,8 @@ RGA2_set_reg_src_info(RK_U8 *base, struct rga2_req *msg)
     reg = ((reg & (~m_RGA2_SRC_INFO_SW_SW_YUV10_ROUND_E)) | (s_RGA2_SRC_INFO_SW_SW_YUV10_ROUND_E((yuv10))));
     RGA2_reg_get_param(base, msg);
 
-    if (yuv10 == 0) {
-        stride = (((msg->src.vir_w * pixel_width) + 3) & ~3) >> 2;
-        uv_stride = ((msg->src.vir_w / xdiv + 3) & ~3);
-    }
-    else {
-        stride = ((((msg->src.vir_w * pixel_width) + 3) & ~3)*10/8) >> 2;
-        uv_stride = (((msg->src.vir_w / xdiv + 3) & ~3)*10/8 );
-    }
+    stride = (((msg->src.vir_w * pixel_width) + 3) & ~3) >> 2;
+    uv_stride = ((msg->src.vir_w / xdiv + 3) & ~3);
 
     *bRGA_SRC_BASE0 = (RK_U32)(msg->src.yrgb_addr + msg->src.y_offset * (stride<<2) + msg->src.x_offset * pixel_width);
     *bRGA_SRC_BASE1 = (RK_U32)(msg->src.uv_addr + (msg->src.y_offset / ydiv) * uv_stride + (msg->src.x_offset / xdiv));
@@ -1056,7 +1050,7 @@ void RGA_MSG_2_RGA2_MSG(struct rga_req *req_rga, struct rga2_req *req)
     req->bitblt_mode = req_rga->bsfilter_flag;
 
     req->src_a_global_val = req_rga->alpha_global_value;
-    req->dst_a_global_val = 0;
+    req->dst_a_global_val = req_rga->alpha_global_value;
     req->rop_code = req_rga->rop_code;
     req->rop_mode = 0;
 
@@ -1087,10 +1081,10 @@ void RGA_MSG_2_RGA2_MSG(struct rga_req *req_rga, struct rga2_req *req)
     req->alpha_rop_flag |= (((req_rga->alpha_rop_flag >> 5) & 1) << 6); // dst_dither_down
     req->alpha_rop_flag |= (((req_rga->alpha_rop_flag >> 6) & 1) << 7); // gradient fill mode sel
 
-    if(((req_rga->alpha_rop_flag) & 1)) {
-        if((req_rga->alpha_rop_flag >> 3) & 1) {
+    if (((req_rga->alpha_rop_flag) & 1)) {
+        if ((req_rga->alpha_rop_flag >> 3) & 1) {
             /* porter duff alpha enable */
-            switch(req_rga->PD_mode)
+            switch (req_rga->PD_mode)
             {
                 case 0: //dst = 0
                     break;
@@ -1136,6 +1130,10 @@ void RGA_MSG_2_RGA2_MSG(struct rga_req *req_rga, struct rga2_req *req)
                     break;
                 case 11://dst = ((256-da)*sc + (256-sa)*dc) >> 8;
                     break;
+		case 12:
+		    req->alpha_mode_0 = 0x0010;
+		    req->alpha_mode_1 = 0x0820;
+		    break;
                 default:
                     break;
             }
@@ -1255,7 +1253,7 @@ void RGA_MSG_2_RGA2_MSG_32(struct rga_req_32 *req_rga, struct rga2_req *req)
     req->rop_mask_addr = req_rga->rop_mask_addr;
     req->bitblt_mode = req_rga->bsfilter_flag;
     req->src_a_global_val = req_rga->alpha_global_value;
-    req->dst_a_global_val = 0;
+    req->dst_a_global_val = req_rga->alpha_global_value;
     req->rop_code = req_rga->rop_code;
     req->rop_mode = 0;
     req->color_fill_mode = req_rga->color_fill_mode;
@@ -1327,6 +1325,10 @@ void RGA_MSG_2_RGA2_MSG_32(struct rga_req_32 *req_rga, struct rga2_req *req)
                     break;
                 case 11://dst = ((256-da)*sc + (256-sa)*dc) >> 8;
                     break;
+		case 12:
+		    req->alpha_mode_0 = 0x0010;
+		    req->alpha_mode_1 = 0x0820;
+		    break;
                 default:
                     break;
             }

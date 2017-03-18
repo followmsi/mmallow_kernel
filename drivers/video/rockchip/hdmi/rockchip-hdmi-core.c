@@ -137,6 +137,12 @@ static void hdmi_wq_set_video(struct hdmi *hdmi)
 	} else {
 		video->vic = hdmi->vic & HDMI_VIC_MASK;
 	}
+
+	if (hdmi->uboot) {
+		if ((uboot_vic & HDMI_UBOOT_VIC_MASK) != hdmi->vic)
+			hdmi->uboot = 0;
+	}
+
 	hdmi_set_lcdc(hdmi);
 	if (hdmi->ops->setvideo)
 		hdmi->ops->setvideo(hdmi, video);
@@ -509,7 +515,7 @@ struct hdmi *rockchip_hdmi_register(struct hdmi_property *property,
 		hdmi->vic = hdmi->property->defaultmode;
 	}
 	hdmi->colormode = HDMI_VIDEO_DEFAULT_COLORMODE;
-	hdmi->colordepth = HDMI_DEPP_COLOR_AUTO;
+	hdmi->colordepth = HDMI_VIDEO_DEFAULT_COLORDEPTH;
 	hdmi->colorimetry = HDMI_COLORIMETRY_NO_DATA;
 	hdmi->mode_3d = HDMI_3D_NONE;
 	hdmi->audio.type = HDMI_AUDIO_DEFAULT_TYPE;

@@ -946,11 +946,14 @@ static int rk3368_fbdc_reg_update(struct rk_lcdc_driver *dev_drv, int win_id)
 	struct rk_lcdc_win *win = dev_drv->win[win_id];
 	u32 mask, val;
 
-	mask = m_IFBDC_CTRL_FBDC_EN | m_IFBDC_CTRL_FBDC_COR_EN |
+	if (lcdc_dev->soc_type != VOP_FULL_RK3368) {
+		pr_err("soc: 0x%08x not support FBDC\n", lcdc_dev->soc_type);
+		return 0;
+	}
+	mask = m_IFBDC_CTRL_FBDC_COR_EN |
 	    m_IFBDC_CTRL_FBDC_WIN_SEL | m_IFBDC_CTRL_FBDC_ROTATION_MODE |
 	    m_IFBDC_CTRL_FBDC_FMT | m_IFBDC_CTRL_WIDTH_RATIO;
-	val = v_IFBDC_CTRL_FBDC_EN(win->area[0].fbdc_en) |
-	    v_IFBDC_CTRL_FBDC_COR_EN(win->area[0].fbdc_cor_en) |
+	val = v_IFBDC_CTRL_FBDC_COR_EN(win->area[0].fbdc_cor_en) |
 	    v_IFBDC_CTRL_FBDC_WIN_SEL(win->id) |
 	    v_IFBDC_CTRL_FBDC_ROTATION_MODE((win->xmirror &&
 					     win->ymirror) << 1) |
@@ -996,6 +999,10 @@ static int rk3368_init_fbdc_config(struct rk_lcdc_driver *dev_drv, int win_id)
 		return 0;
 	}
 
+	if (lcdc_dev->soc_type != VOP_FULL_RK3368) {
+		pr_err("soc: 0x%08x not support FBDC\n", lcdc_dev->soc_type);
+		return 0;
+	}
 	switch (win->area[0].fmt_cfg) {
 	case VOP_FORMAT_ARGB888:
 		fbdc_dsp_width_ratio = 0;
@@ -1109,11 +1116,18 @@ static int rk3368_lcdc_axi_gather_cfg(struct lcdc_device *lcdc_dev,
 	switch (win->area[0].format) {
 	case ARGB888:
 	case XBGR888:
+	case XRGB888:
 	case ABGR888:
+	case FBDC_ARGB_888:
+	case FBDC_RGBX_888:
+	case FBDC_ABGR_888:
 		yrgb_gather_num = 3;
 		break;
 	case RGB888:
 	case RGB565:
+	case BGR888:
+	case BGR565:
+	case FBDC_RGB_565:
 		yrgb_gather_num = 2;
 		break;
 	case YUV444:
@@ -1201,13 +1215,8 @@ static int rk3368_win_0_1_reg_update(struct rk_lcdc_driver *dev_drv, int win_id)
 	if (win->state == 1) {
 		rk3368_lcdc_csc_mode(lcdc_dev, win);
 		rk3368_lcdc_axi_gather_cfg(lcdc_dev, win);
-		if (win->area[0].fbdc_en) {
+		if (win->area[0].fbdc_en)
 			rk3368_fbdc_reg_update(&lcdc_dev->driver, win_id);
-		} else {
-			mask = m_IFBDC_CTRL_FBDC_EN;
-			val = v_IFBDC_CTRL_FBDC_EN(0);
-			lcdc_msk_reg(lcdc_dev, IFBDC_CTRL, mask, val);
-		}
 		mask = m_WIN0_EN | m_WIN0_DATA_FMT | m_WIN0_FMT_10 |
 			m_WIN0_LB_MODE | m_WIN0_RB_SWAP | m_WIN0_X_MIRROR |
 			m_WIN0_Y_MIRROR | m_WIN0_CSC_MODE | m_WIN0_UV_SWAP;
@@ -1312,13 +1321,8 @@ static int rk3368_win_2_3_reg_update(struct rk_lcdc_driver *dev_drv, int win_id)
 	if (win->state == 1) {
 		rk3368_lcdc_csc_mode(lcdc_dev, win);
 		rk3368_lcdc_axi_gather_cfg(lcdc_dev, win);
-		if (win->area[0].fbdc_en) {
+		if (win->area[0].fbdc_en)
 			rk3368_fbdc_reg_update(&lcdc_dev->driver, win_id);
-		} else {
-			mask = m_IFBDC_CTRL_FBDC_EN;
-			val = v_IFBDC_CTRL_FBDC_EN(0);
-			lcdc_msk_reg(lcdc_dev, IFBDC_CTRL, mask, val);
-		}
 
 		mask = m_WIN2_EN | m_WIN2_CSC_MODE;
 		val = v_WIN2_EN(1) | v_WIN1_CSC_MODE(win->csc_mode);
@@ -2349,7 +2353,7 @@ static int win_0_1_display(struct lcdc_device *lcdc_dev,
 		lcdc_writel(lcdc_dev, WIN0_CBR_MST + off, win->area[0].uv_addr);
 		if (win->area[0].fbdc_en == 1)
 			lcdc_writel(lcdc_dev, IFBDC_BASE_ADDR,
-				    win->area[0].y_addr);
+				    win->area[0].smem_start);
 	}
 	spin_unlock(&lcdc_dev->reg_lock);
 
@@ -2380,7 +2384,7 @@ static int win_2_3_display(struct lcdc_device *lcdc_dev,
 		lcdc_writel(lcdc_dev, WIN2_MST3 + off, win->area[3].y_addr);
 		if (win->area[0].fbdc_en == 1)
 			lcdc_writel(lcdc_dev, IFBDC_BASE_ADDR,
-				    win->area[0].y_addr);
+				    win->area[0].smem_start);
 	}
 	spin_unlock(&lcdc_dev->reg_lock);
 	return 0;
@@ -3096,6 +3100,12 @@ static int win_2_3_set_par(struct lcdc_device *lcdc_dev,
 			case FBDC_ARGB_888:
 				fmt_cfg = 0;
 				swap_rb = 0;
+				win->fmt_10 = 0;
+				win->area[0].fbdc_fmt_cfg = 0x0c;
+				break;
+			case FBDC_ABGR_888:
+				fmt_cfg = 0;
+				swap_rb = 1;
 				win->fmt_10 = 0;
 				win->area[0].fbdc_fmt_cfg = 0x0c;
 				break;
@@ -4105,7 +4115,7 @@ static int rk3368_lcdc_config_done(struct rk_lcdc_driver *dev_drv)
 	struct lcdc_device *lcdc_dev =
 	    container_of(dev_drv, struct lcdc_device, driver);
 	int i;
-	unsigned int mask, val;
+	unsigned int mask, val, fbdc_en = 0;
 	struct rk_lcdc_win *win = NULL;
 	u32 line_scane_num, dsp_vs_st_f1;
 
@@ -4127,6 +4137,7 @@ static int rk3368_lcdc_config_done(struct rk_lcdc_driver *dev_drv)
 		     v_STANDBY_EN(lcdc_dev->standby));
 	for (i = 0; i < 4; i++) {
 		win = dev_drv->win[i];
+		fbdc_en |= win->area[0].fbdc_en;
 		if ((win->state == 0) && (win->last_state == 1)) {
 			switch (win->id) {
 			case 0:
@@ -4171,6 +4182,11 @@ static int rk3368_lcdc_config_done(struct rk_lcdc_driver *dev_drv)
 			}
 		}
 		win->last_state = win->state;
+	}
+	if (lcdc_dev->soc_type == VOP_FULL_RK3368) {
+		mask = m_IFBDC_CTRL_FBDC_EN;
+		val = v_IFBDC_CTRL_FBDC_EN(fbdc_en);
+		lcdc_msk_reg(lcdc_dev, IFBDC_CTRL, mask, val);
 	}
 	lcdc_cfg_done(lcdc_dev);
 	spin_unlock(&lcdc_dev->reg_lock);
@@ -5059,7 +5075,7 @@ static int rk3368_lcdc_probe(struct platform_device *pdev)
 	dev_drv->id = lcdc_dev->id;
 	dev_drv->ops = &lcdc_drv_ops;
 	dev_drv->lcdc_win_num = ARRAY_SIZE(lcdc_win);
-	dev_drv->reserved_fb = 1;/*only need reserved 1 buffer*/
+	dev_drv->reserved_fb = TWO_FB_BUFFER; /* only need reserved 2 buffer */
 	spin_lock_init(&lcdc_dev->reg_lock);
 
 	lcdc_dev->irq = platform_get_irq(pdev, 0);

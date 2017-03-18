@@ -54,6 +54,9 @@ module_param_named(dbg_level, pwm_dbg_level, int, 0644);
 #define PWM_ENABLE      				(1 << 3)
 #define PWM_TIMER_EN    				(1 << 0)
 
+#define PWM_LOCK_EN		(1 << 6)
+#define PWM_UNLOCK_EN		(~PWM_LOCK_EN)
+
 #define RK_PWM_DISABLE                     (0 << 0) 
 #define RK_PWM_ENABLE                       (1 << 0)
 
@@ -97,6 +100,7 @@ module_param_named(dbg_level, pwm_dbg_level, int, 0644);
  struct rk_pwm_chip {
 	void __iomem *base;
 	struct clk *clk;
+	struct clk *pclk;
 	struct clk *aclk_lcdc;
 	struct clk *hclk_lcdc;
 	struct pwm_chip chip;
@@ -288,7 +292,6 @@ static int  rk_pwm_config_v2(struct pwm_chip *chip, struct pwm_device *pwm,
        spinlock_t *lock;
 
        lock = (&pc->lock);//&pwm_lock[pwm->hwpwm];
-	on   =  RK_PWM_ENABLE ;
 	conf = PWM_OUTPUT_LEFT|PWM_LP_DISABLE|
 	                    PWM_CONTINUMOUS|PWM_DUTY_POSTIVE|PWM_INACTIVE_NEGATIVE;
 	/*
@@ -340,6 +343,12 @@ static int  rk_pwm_config_v2(struct pwm_chip *chip, struct pwm_device *pwm,
 	barrier();
 	//rk_pwm_writel(pc, pwm->hwpwm, PWM_REG_CTRL,off);
 	//dsb(sy);
+
+	/* lock */
+	on = rk_pwm_readl(pc, pwm->hwpwm, PWM_REG_CTRL);
+	on |= PWM_LOCK_EN;
+	rk_pwm_writel(pc, pwm->hwpwm, PWM_REG_CTRL, on);
+
 	if (!rk3368_lcdc_cabc_status()) {
 	    rk_pwm_writel(pc, pwm->hwpwm, PWM_REG_DUTY,dc);//0x1900);// dc);
 	    rk_pwm_writel(pc, pwm->hwpwm, PWM_REG_PERIOD,pv);//0x5dc0);//pv);
@@ -348,6 +357,11 @@ static int  rk_pwm_config_v2(struct pwm_chip *chip, struct pwm_device *pwm,
 	}
 	rk_pwm_writel(pc, pwm->hwpwm, PWM_REG_CNTR,0);
 	dsb(sy);
+
+	/* unlock */
+	on = rk_pwm_readl(pc, pwm->hwpwm, PWM_REG_CTRL);
+	on &= PWM_UNLOCK_EN;
+	on |= RK_PWM_ENABLE;
 	rk_pwm_writel(pc, pwm->hwpwm, PWM_REG_CTRL,on|conf);
        spin_unlock_irqrestore(lock, flags);	
 
@@ -508,7 +522,7 @@ static int  rk_pwm_config(struct pwm_chip *chip, struct pwm_device *pwm,
 	struct rk_pwm_chip *pc = to_rk_pwm_chip(chip);
 	int ret;
 	
-	ret = clk_enable(pc->clk);
+	ret = clk_enable(pc->pclk);
 	if (ret)
 		return ret;
 
@@ -530,7 +544,7 @@ static int  rk_pwm_config(struct pwm_chip *chip, struct pwm_device *pwm,
 	if (pc->hclk_lcdc)
 		clk_disable(pc->hclk_lcdc);
 
-	clk_disable(pc->clk);
+	clk_disable(pc->pclk);
 
 	return 0;
 }
@@ -540,6 +554,9 @@ static int rk_pwm_enable(struct pwm_chip *chip, struct pwm_device *pwm)
 	int ret = 0;
 
 	ret = clk_enable(pc->clk);
+	if (ret)
+		return ret;
+	ret = clk_enable(pc->pclk);
 	if (ret)
 		return ret;
 
@@ -555,12 +572,20 @@ static int rk_pwm_enable(struct pwm_chip *chip, struct pwm_device *pwm)
 	}
 
 	pc->set_enable(chip, pwm,true);
+
+	clk_disable(pc->pclk);
+
 	return 0;
 }
 
 static void rk_pwm_disable(struct pwm_chip *chip, struct pwm_device *pwm)
 {
 	struct rk_pwm_chip *pc = to_rk_pwm_chip(chip);
+	int ret;
+
+	ret = clk_enable(pc->pclk);
+	if (ret)
+		return;
 
 	pc->set_enable(chip, pwm,false);
 
@@ -569,6 +594,7 @@ static void rk_pwm_disable(struct pwm_chip *chip, struct pwm_device *pwm)
 	if (pc->hclk_lcdc)
 		clk_disable(pc->hclk_lcdc);
 
+	clk_disable(pc->pclk);
 	clk_disable(pc->clk);
 
 }
@@ -628,7 +654,7 @@ static int rk_pwm_probe(struct platform_device *pdev)
 	struct device_node *np = pdev->dev.of_node;
 	const struct rk_pwm_data *data;
 	struct rk_pwm_chip *pc;
-	int ret;
+	int ret, count;
 
 	if (!of_id){
 		dev_err(&pdev->dev, "failed to match device\n");
@@ -643,28 +669,64 @@ static int rk_pwm_probe(struct platform_device *pdev)
 	s_rk_pwm_chip = pc;
 	pc->base = of_iomap(np, 0);
 	if (IS_ERR(pc->base)) {
-		printk("PWM base ERR \n");
+		dev_err(&pdev->dev, "PWM base ERR\n");
 		return PTR_ERR(pc->base);
 	}
-	pc->clk = devm_clk_get(&pdev->dev, "pclk_pwm");
-	if (IS_ERR(pc->clk))
-		return PTR_ERR(pc->clk);
+
+	count = of_property_count_strings(np, "clock-names");
+	if (count == 2) {
+		pc->clk = devm_clk_get(&pdev->dev, "pwm");
+		pc->pclk = devm_clk_get(&pdev->dev, "pclk");
+	} else {
+		pc->clk = devm_clk_get(&pdev->dev, "pclk_pwm");
+		pc->pclk = pc->clk;
+	}
+
+	if (IS_ERR(pc->clk)) {
+		ret = PTR_ERR(pc->clk);
+		if (ret != -EPROBE_DEFER)
+			dev_err(&pdev->dev, "Can't get bus clk: %d\n", ret);
+		return ret;
+	}
+
+	if (IS_ERR(pc->pclk)) {
+		ret = PTR_ERR(pc->pclk);
+		if (ret != -EPROBE_DEFER)
+			dev_err(&pdev->dev, "Can't get periph clk: %d\n", ret);
+		return ret;
+	}
+
+	ret = clk_prepare(pc->clk);
+	if (ret) {
+		dev_err(&pdev->dev, "Can't get bus clk: %d\n", ret);
+		return ret;
+	}
+
+	ret = clk_prepare(pc->pclk);
+	if (ret) {
+		dev_err(&pdev->dev, "Can't get bus periph clk: %d\n", ret);
+		goto err_clk;
+	}
 
 	if (of_device_is_compatible(np, "rockchip,vop-pwm")) {
 		pc->aclk_lcdc = devm_clk_get(&pdev->dev, "aclk_lcdc");
-		if (IS_ERR(pc->aclk_lcdc))
-			return PTR_ERR(pc->aclk_lcdc);
+		if (IS_ERR(pc->aclk_lcdc)) {
+			ret = PTR_ERR(pc->aclk_lcdc);
+			goto err_pclk;
+		}
 
 		pc->hclk_lcdc = devm_clk_get(&pdev->dev, "hclk_lcdc");
-		if (IS_ERR(pc->hclk_lcdc))
-			return PTR_ERR(pc->hclk_lcdc);
+		if (IS_ERR(pc->hclk_lcdc)) {
+			ret = PTR_ERR(pc->hclk_lcdc);
+			goto err_pclk;
+		}
 
 		ret = clk_prepare(pc->aclk_lcdc);
 		if (ret)
-			return ret;
-		clk_prepare(pc->hclk_lcdc);
+			goto err_pclk;
+		ret = clk_prepare(pc->hclk_lcdc);
 		if (ret)
-			return ret;
+			goto err_aclk_lcdc;
 	}
 
 	platform_set_drvdata(pdev, pc);
@@ -678,9 +740,6 @@ static int rk_pwm_probe(struct platform_device *pdev)
 	pc->chip.base = -1;
 	pc->chip.npwm = NUM_PWM;
 	spin_lock_init(&pc->lock);
-	ret = clk_prepare(pc->clk);
-	if (ret)
-		return ret;
 
 	/* Following enables PWM chip, channels would still
 	be enabled individually through their control register */
@@ -689,10 +748,22 @@ static int rk_pwm_probe(struct platform_device *pdev)
 	ret = pwmchip_add(&pc->chip);
 	if (ret < 0){
 		printk("failed to add pwm\n");
-		return ret;
+		goto err_hclk_lcdc;
 	}
 
-	DBG("%s end \n",__FUNCTION__);
+	DBG("%s end\n", __func__);
+	return 0;
+
+err_hclk_lcdc:
+	if (pc->hclk_lcdc)
+		clk_unprepare(pc->hclk_lcdc);
+err_aclk_lcdc:
+	if (pc->aclk_lcdc)
+		clk_unprepare(pc->aclk_lcdc);
+err_pclk:
+	clk_unprepare(pc->pclk);
+err_clk:
+	clk_unprepare(pc->clk);
 	return ret;
 }
 #if 0
@@ -727,6 +798,16 @@ static int rk_pwm_resume(struct platform_device *pdev)
 #endif
 static int rk_pwm_remove(struct platform_device *pdev)
 {
+	struct rk_pwm_chip *pc = platform_get_drvdata(pdev);
+
+	if (pc->hclk_lcdc)
+		clk_unprepare(pc->hclk_lcdc);
+	if (pc->aclk_lcdc)
+		clk_unprepare(pc->aclk_lcdc);
+
+	clk_unprepare(pc->clk);
+	clk_unprepare(pc->pclk);
+
 	return 0;//pwmchip_remove(&pc->chip);
 }
 

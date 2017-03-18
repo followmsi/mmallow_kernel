@@ -14,7 +14,7 @@ if INPUT_TOUCHSCREEN
 config TOUCHSCREEN_ZET62XX
 	tristate "zet62xx touchscreen driver"
 	help
-		zet62xx touchscreen driver
+	  zet62xx touchscreen driver
 
 
 config GEEKBOX_GSLX680
@@ -25,7 +25,20 @@ config GEEKBOX_GSLX680
 config TOUCHSCREEN_GSLX680
 	tristate "gslX680 touchscreen driver"
 	help
-		gslX680 touchscreen driver
+	  gslX680 touchscreen driver
+
+config TOUCHSCREEN_GSLX680_VR
+	tristate "gslX680 touchpad driver for VR"
+	help
+	  gslX680 touchpad driver for VR
+
+config TOUCHSCREEN_GSLX680_PX5
+	tristate "gslX680 touchscreen driver for PX5"
+	help
+	  Say Y here if you have a touchscreen interface using the
+	  gslx680, and your board-specific initialization
+	  code includes that in its table of IIC devices.
+	  If unsure, say N.
 
 config TOUCHSCREEN_GT8XX
 	tristate "Goodix touch screen gt801X2 support for rockchip based platform"

@@ -291,6 +291,12 @@ enum rk_vop_feature {
 	SUPPORT_YUV420_OUTPUT	= BIT(4)
 };
 
+enum rk_fb_buffer {
+	DEFAULT_FB_BUFFER	= 0,
+	ONE_FB_BUFFER		= 1,
+	TWO_FB_BUFFER		= 2,
+};
+
 struct rk_vop_property {
 	u32 feature;
 	u32 max_output_x;
@@ -559,6 +565,8 @@ struct rk_lcdc_drv_ops {
 	int (*extern_func)(struct rk_lcdc_driver *dev_drv, int cmd);
 	int (*wait_frame_start)(struct rk_lcdc_driver *dev_drv, int enable);
 	int (*set_wb)(struct rk_lcdc_driver *dev_drv);
+	int (*mcu_ctrl)(struct rk_lcdc_driver *dev_drv, unsigned int cmd,
+			unsigned int arg);
 };
 
 struct rk_fb_area_par {
@@ -830,5 +838,6 @@ int rk_fb_get_display_policy(void);
 int rk_fb_pixel_width(int data_format);
 void trace_buffer_dump(struct device *dev,
 			      struct rk_lcdc_driver *dev_drv);
+int rk_fb_set_car_reverse_status(struct rk_lcdc_driver *dev_drv, int status);
 extern int rockchip_get_screen_type(void);
 #endif

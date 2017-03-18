@@ -31,6 +31,7 @@
 #include <linux/rockchip-iovmm.h>
 #include <asm/div64.h>
 #include <linux/uaccess.h>
+#include <linux/of_device.h>
 #include <linux/rockchip/cpu.h>
 #include <linux/rockchip/iomap.h>
 #include <linux/rockchip/grf.h>
@@ -40,6 +41,7 @@
 #include "rk_vop_lite.h"
 
 static int dbg_thresd;
+#define VOP_CHIP(dev)	(dev->data->chip_type)
 module_param(dbg_thresd, int, S_IRUGO | S_IWUSR);
 
 #define DBG(level, x...) do {			\
@@ -54,6 +56,24 @@ static struct rk_lcdc_win vop_win[] = {
 	{ .name = "win1", .id = 1},
 	{ .name = "hwc",  .id = 2}
 };
+
+static const struct vop_data rk3366_data = {
+	.chip_type = VOP_RK3366,
+};
+
+static const struct vop_data rk1108_data = {
+	.chip_type = VOP_RK1108,
+};
+
+#if defined(CONFIG_OF)
+static const struct of_device_id vop_dt_ids[] = {
+	{.compatible = "rockchip,rk3366-lcdc-lite",
+	 .data = &rk3366_data, },
+	{.compatible = "rockchip,rk1108-lcdc-lite",
+	 .data = &rk1108_data, },
+	{}
+};
+#endif
 
 static int vop_set_bcsh(struct rk_lcdc_driver *dev_drv, bool enable);
 
@@ -481,7 +501,7 @@ static int vop_clr_key_cfg(struct rk_lcdc_driver *dev_drv)
 	struct rk_lcdc_win *win;
 	int i;
 
-	for (i = 0; i < dev_drv->lcdc_win_num; i++) {
+	for (i = 0; i < dev_drv->lcdc_win_num - 1; i++) {
 		win = dev_drv->win[i];
 		switch (i) {
 		case 0:
@@ -840,6 +860,41 @@ static int vop_set_dclk(struct rk_lcdc_driver *dev_drv, int reset_rate)
 	return 0;
 }
 
+static int vop_config_mcu_timing(struct rk_lcdc_driver *dev_drv)
+{
+	struct vop_device *vop_dev = to_vop_dev(dev_drv);
+	struct rk_screen *screen = dev_drv->cur_screen;
+
+	u32 mcu_total, mcu_cs_start, mcu_cs_end, mcu_rw_start, mcu_rw_end;
+	u32 ppixel_time, val;
+
+	if (VOP_CHIP(vop_dev) != VOP_RK1108) {
+		pr_err("unsupport mcu screen type: %d\n", VOP_CHIP(vop_dev));
+		return 0;
+	}
+	ppixel_time = NSEC_PER_SEC /
+		(MCU_SCREEN_MAX_FPS * screen->mode.xres * screen->mode.yres);
+	mcu_total  = ppixel_time / (NSEC_PER_SEC / screen->mode.pixclock);
+	if (mcu_total > 63)
+		mcu_total = 63;
+	if (mcu_total < 3)
+		mcu_total = 3;
+	mcu_rw_start = (mcu_total + 1) / 4 - 1;
+	mcu_rw_end = ((mcu_total + 1) * 3) / 4 - 1;
+	mcu_cs_start = (mcu_rw_start > 2) ? (mcu_rw_start - 3) : 0;
+	mcu_cs_end = (mcu_rw_end > 15) ? (mcu_rw_end-1) : mcu_rw_end;
+	dev_info(vop_dev->dev,
+		 "total:%d, cs_start:%d, rw_start:%d,, rw_end:%d, cs_end:%d\n",
+		 mcu_total, mcu_cs_start, mcu_rw_start, mcu_rw_end, mcu_cs_end);
+	val = V_MCU_PIX_TOTAL(mcu_total) | V_MCU_CS_PST(mcu_cs_start) |
+		V_MCU_CS_PEND(mcu_cs_end) | V_MCU_RW_PST(mcu_rw_start) |
+		V_MCU_RW_PEND(mcu_rw_end) | V_MCU_CLK_SEL(1) |
+		V_MCU_HOLD_MODE(1) | V_MCU_FRAME_ST(0);
+	vop_msk_reg(vop_dev, MCU_CTRL, val);
+
+	return 0;
+}
+
 static int vop_config_timing(struct rk_lcdc_driver *dev_drv)
 {
 	struct vop_device *vop_dev = to_vop_dev(dev_drv);
@@ -934,6 +989,17 @@ static int vop_config_source(struct rk_lcdc_driver *dev_drv)
 			V_RGB_HSYNC_POL(screen->pin_hsync) |
 			V_RGB_VSYNC_POL(screen->pin_vsync) |
 			V_RGB_DEN_POL(screen->pin_den);
+		if (VOP_CHIP(vop_dev) == VOP_RK1108) {
+			if (vop_dev->pins && !IS_ERR(vop_dev->pins->default_state))
+				pinctrl_select_state(vop_dev->pins->p,
+						     vop_dev->pins->default_state);
+			vop_mipi_dsi_writel(vop_dev->dsi_phy_regs,
+					    DPHY_TTL_EN, 0x04);
+			vop_mipi_dsi_writel(vop_dev->dsi_phy_regs,
+					    DPHY_TTL_LANE_EN, 0xfd);
+			vop_mipi_dsi_writel(vop_dev->dsi_host_regs,
+					    MIPI_DSI_HOST_PHY_RSTZ, 0xf);
+		}
 		break;
 	case SCREEN_HDMI:
 		vop_grf_writel(vop_dev->grf_base, GRF_SOC_CON0,
@@ -958,6 +1024,24 @@ static int vop_config_source(struct rk_lcdc_driver *dev_drv)
 			V_MIPI_HSYNC_POL(screen->pin_hsync) |
 			V_MIPI_VSYNC_POL(screen->pin_vsync) |
 			V_MIPI_DEN_POL(screen->pin_den);
+		break;
+	case SCREEN_TVOUT:
+		val = V_UV_OFFSET_EN(1) | V_GENLOCK(1) | V_DAC_SEL(1);
+		if (screen->mode.xres == 720 &&
+		    screen->mode.yres == 576)
+			val |= V_TVE_MODE(1);
+		else
+			val |= V_TVE_MODE(0);
+		vop_msk_reg(vop_dev, SYS_CTRL0, val);
+
+		val = V_TVE_DAC_DCLK_EN(1) |
+			V_TVE_DAC_DCLK_POL(screen->pin_dclk) |
+			V_TVE_DAC_HSYNC_POL(screen->pin_hsync) |
+			V_TVE_DAC_VSYNC_POL(screen->pin_vsync);
+		vop_msk_reg(vop_dev, DSP_CTRL1, val);
+		break;
+	case SCREEN_MCU:
+		dev_info(vop_dev->dev, "mcu screen type!\n");
 		break;
 	default:
 		dev_err(vop_dev->dev, "un supported interface[%d]!\n",
@@ -1171,6 +1255,8 @@ static int vop_load_screen(struct rk_lcdc_driver *dev_drv, bool initscreen)
 		vop_config_interface(dev_drv);
 		vop_config_source(dev_drv);
 		vop_config_timing(dev_drv);
+		if (screen->type == SCREEN_MCU)
+			vop_config_mcu_timing(dev_drv);
 		if (dev_drv->overlay_mode == VOP_YUV_DOMAIN)
 			vop_config_background(dev_drv, 0x801080);
 		else
@@ -1297,18 +1383,48 @@ static int win_0_1_set_par(struct vop_device *vop_dev,
 			   struct rk_screen *screen, struct rk_lcdc_win *win)
 {
 	char fmt[9] = "NULL";
+	struct rk_lcdc_driver *dev_drv = &vop_dev->driver;
+
+	if (win->id != 0) {
+		if ((dev_drv->overscan.left != 100) ||
+		    (dev_drv->overscan.right != 100) ||
+		    (dev_drv->overscan.top != 100) ||
+		    (dev_drv->overscan.bottom != 100)) {
+			pr_err("win%d unsupport scale\n", win->id);
+			dev_drv->overscan.left = 100;
+			dev_drv->overscan.right = 100;
+			dev_drv->overscan.top = 100;
+			dev_drv->overscan.bottom = 100;
+		}
+	}
+	win->post_cfg.xpos = win->area[0].xpos *
+		(dev_drv->overscan.left + dev_drv->overscan.right) / 200 +
+		screen->mode.xres * (100 - dev_drv->overscan.left) / 200;
+
+	win->post_cfg.ypos = win->area[0].ypos *
+		(dev_drv->overscan.top + dev_drv->overscan.bottom) / 200 +
+		screen->mode.yres * (100 - dev_drv->overscan.top) / 200;
+	win->post_cfg.xsize = win->area[0].xsize * (dev_drv->overscan.left +
+		dev_drv->overscan.right) / 200;
+	win->post_cfg.ysize = win->area[0].ysize * (dev_drv->overscan.top +
+		dev_drv->overscan.bottom) / 200;
 
 	win->area[0].dsp_stx = win->area[0].xpos + screen->mode.left_margin +
-				screen->mode.hsync_len;
+				screen->mode.hsync_len + win->post_cfg.xpos;
 	if (screen->mode.vmode & FB_VMODE_INTERLACED) {
 		win->area[0].ysize /= 2;
+		win->post_cfg.ysize /= 2;
 		win->area[0].dsp_sty = win->area[0].ypos / 2 +
-			screen->mode.upper_margin + screen->mode.vsync_len;
+			screen->mode.upper_margin + screen->mode.vsync_len +
+			win->post_cfg.ypos / 2;
 	} else {
 		win->area[0].dsp_sty = win->area[0].ypos +
-			screen->mode.upper_margin + screen->mode.vsync_len;
+			screen->mode.upper_margin + screen->mode.vsync_len +
+			win->post_cfg.ypos;
 	}
 
+	win->area[0].xsize = win->post_cfg.xsize;
+	win->area[0].ysize = win->post_cfg.ysize;
 	win->scale_yrgb_x = CALSCALE(win->area[0].xact, win->area[0].xsize);
 	win->scale_yrgb_y = CALSCALE(win->area[0].yact, win->area[0].ysize);
 
@@ -1915,6 +2031,21 @@ static int vop_fb_win_remap(struct rk_lcdc_driver *dev_drv, u16 order)
 	return 0;
 }
 
+static int vop_mcu_refresh(struct rk_lcdc_driver *dev_drv)
+{
+	struct vop_device *vop_dev = to_vop_dev(dev_drv);
+
+	if (VOP_CHIP(vop_dev) != VOP_RK1108) {
+		pr_err("unsupport mcu screen type: %d\n", VOP_CHIP(vop_dev));
+		return 0;
+	}
+	if (vop_dev->screen->refresh)
+		vop_dev->screen->refresh(1);
+	vop_msk_reg_nobak(vop_dev, MCU_CTRL, V_MCU_FRAME_ST(1));
+
+	return 0;
+}
+
 static int vop_get_win_id(struct rk_lcdc_driver *dev_drv, const char *id)
 {
 	int win_id = 0;
@@ -1948,6 +2079,8 @@ static int vop_config_done(struct rk_lcdc_driver *dev_drv)
 			vop_layer_update_regs(vop_dev, win);
 		}
 		vop_cfg_done(vop_dev);
+		if (dev_drv->cur_screen->type == SCREEN_MCU)
+			vop_mcu_refresh(dev_drv);
 	}
 	spin_unlock(&vop_dev->reg_lock);
 
@@ -2269,6 +2402,36 @@ vop_dsp_black(struct rk_lcdc_driver *dev_drv, int enable)
 	return 0;
 }
 
+static int vop_mcu_ctrl(struct rk_lcdc_driver *dev_drv, unsigned int cmd,
+			unsigned int arg)
+{
+	struct vop_device *vop_dev = to_vop_dev(dev_drv);
+
+	if (VOP_CHIP(vop_dev) != VOP_RK1108) {
+		pr_err("unsupport mcu screen type: %d\n", VOP_CHIP(vop_dev));
+		return 0;
+	}
+	switch (cmd) {
+	case MCU_WRCMD:
+		vop_msk_reg(vop_dev, MCU_CTRL, V_MCU_RS(0));
+		vop_writel(vop_dev, MCU_RW_BYPASS_PORT, arg);
+		vop_msk_reg(vop_dev, MCU_CTRL, V_MCU_RS(1));
+		break;
+	case MCU_WRDATA:
+		vop_msk_reg(vop_dev, MCU_CTRL, V_MCU_RS(1));
+		vop_writel(vop_dev, MCU_RW_BYPASS_PORT, arg);
+		break;
+	case MCU_SETBYPASS:
+		vop_msk_reg(vop_dev, MCU_CTRL, V_MCU_BYPASS(!!arg));
+		vop_cfg_done(vop_dev);
+		break;
+	default:
+		break;
+	}
+
+	return 0;
+}
+
 static struct rk_lcdc_drv_ops lcdc_drv_ops = {
 	.open = vop_open,
 	.win_direct_en = vop_win_direct_en,
@@ -2307,6 +2470,7 @@ static struct rk_lcdc_drv_ops lcdc_drv_ops = {
 	/*.dsp_black = vop_dsp_black,*/
 	.backlight_close = vop_backlight_close,
 	.mmu_en = vop_mmu_enable,
+	.mcu_ctrl = vop_mcu_ctrl,
 };
 
 static irqreturn_t vop_isr(int irq, void *dev_id)
@@ -2466,6 +2630,7 @@ static int vop_probe(struct platform_device *pdev)
 	struct device *dev = &pdev->dev;
 	struct resource *res;
 	struct device_node *np = pdev->dev.of_node;
+	const struct of_device_id *of_id;
 	int prop;
 	int ret = 0;
 
@@ -2485,6 +2650,8 @@ static int vop_probe(struct platform_device *pdev)
 
 	platform_set_drvdata(pdev, vop_dev);
 	vop_dev->dev = dev;
+	of_id = of_match_device(vop_dt_ids, dev);
+	vop_dev->data = of_id->data;
 	vop_parse_dt(vop_dev);
 
 	/* enable power domain */
@@ -2493,29 +2660,56 @@ static int vop_probe(struct platform_device *pdev)
 	vop_dev->hclk = devm_clk_get(vop_dev->dev, "hclk_lcdc");
 	if (IS_ERR(vop_dev->hclk)) {
 		dev_err(vop_dev->dev, "failed to get hclk source\n");
-		return PTR_ERR(vop_dev->hclk);
+		vop_dev->hclk = NULL;
 	}
 
 	vop_dev->aclk = devm_clk_get(vop_dev->dev, "aclk_lcdc");
 	if (IS_ERR(vop_dev->aclk)) {
 		dev_err(vop_dev->dev, "failed to get aclk source\n");
-		return PTR_ERR(vop_dev->aclk);
+		vop_dev->aclk = NULL;
 	}
 	vop_dev->dclk = devm_clk_get(vop_dev->dev, "dclk_lcdc");
 	if (IS_ERR(vop_dev->dclk)) {
 		dev_err(vop_dev->dev, "failed to get dclk source\n");
-		return PTR_ERR(vop_dev->dclk);
+		vop_dev->dclk = NULL;
 	}
-
-	clk_prepare(vop_dev->hclk);
-	clk_prepare(vop_dev->aclk);
-	clk_prepare(vop_dev->dclk);
-
-	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	vop_dev->regs = devm_ioremap_resource(dev, res);
-	if (IS_ERR(vop_dev->regs)) {
-		ret = PTR_ERR(vop_dev->regs);
-		goto err_exit;
+	if (vop_dev->hclk)
+		clk_prepare(vop_dev->hclk);
+	if (vop_dev->aclk)
+		clk_prepare(vop_dev->aclk);
+	if (vop_dev->dclk)
+		clk_prepare(vop_dev->dclk);
+	if (VOP_CHIP(vop_dev) == VOP_RK1108) {
+		res = platform_get_resource_byname(pdev, IORESOURCE_MEM,
+						   "mipi_dsi_phy");
+		vop_dev->dsi_phy_regs =
+			devm_ioremap(dev, res->start, resource_size(res));
+		if (IS_ERR(vop_dev->dsi_phy_regs)) {
+			ret = PTR_ERR(vop_dev->dsi_phy_regs);
+			goto err_exit;
+		}
+		res = platform_get_resource_byname(pdev, IORESOURCE_MEM,
+						   "mipi_dsi_host");
+		vop_dev->dsi_host_regs =
+			devm_ioremap(dev, res->start, resource_size(res));
+		if (IS_ERR(vop_dev->dsi_host_regs)) {
+			ret = PTR_ERR(vop_dev->dsi_host_regs);
+			goto err_exit;
+		}
+		res = platform_get_resource_byname(pdev, IORESOURCE_MEM,
+						   "vop_reg");
+		vop_dev->regs = devm_ioremap_resource(dev, res);
+		if (IS_ERR(vop_dev->regs)) {
+			ret = PTR_ERR(vop_dev->regs);
+			goto err_exit;
+		}
+	} else {
+		res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+		vop_dev->regs = devm_ioremap_resource(dev, res);
+		if (IS_ERR(vop_dev->regs)) {
+			ret = PTR_ERR(vop_dev->regs);
+			goto err_exit;
+		}
 	}
 
 	vop_dev->reg_phy_base = res->start;
@@ -2534,7 +2728,7 @@ static int vop_probe(struct platform_device *pdev)
 		vop_dev->grf_base = NULL;
 	}
 
-	vop_dev->id = 1;
+	vop_dev->id = VOP_CHIP(vop_dev);
 	dev_set_name(vop_dev->dev, "vop%d", vop_dev->id);
 	dev_drv = &vop_dev->driver;
 	dev_drv->dev = dev;
@@ -2542,7 +2736,10 @@ static int vop_probe(struct platform_device *pdev)
 	dev_drv->id = vop_dev->id;
 	dev_drv->ops = &lcdc_drv_ops;
 	dev_drv->lcdc_win_num = ARRAY_SIZE(vop_win);
-	dev_drv->reserved_fb = 0;
+	if (VOP_CHIP(vop_dev) == VOP_RK1108)
+		dev_drv->reserved_fb = ONE_FB_BUFFER;
+	else
+		dev_drv->reserved_fb = DEFAULT_FB_BUFFER;
 	spin_lock_init(&vop_dev->reg_lock);
 	spin_lock_init(&vop_dev->irq_lock);
 	init_completion(&vop_dev->sync.stdbyfin);
@@ -2569,6 +2766,34 @@ static int vop_probe(struct platform_device *pdev)
 	if (dev_drv->iommu_enabled)
 		strcpy(dev_drv->mmu_dts_name, VOPL_IOMMU_COMPATIBLE_NAME);
 
+	if (VOP_CHIP(vop_dev) == VOP_RK1108) {
+		vop_dev->pins = devm_kzalloc(vop_dev->dev,
+					     sizeof(*(vop_dev->pins)),
+					     GFP_KERNEL);
+		if (!vop_dev->pins) {
+			dev_err(vop_dev->dev, "kzalloc vop pins failed\n");
+			return -ENOMEM;
+		}
+
+		vop_dev->pins->p = devm_pinctrl_get(vop_dev->dev);
+		if (IS_ERR(vop_dev->pins->p)) {
+			dev_info(vop_dev->dev, "no pinctrl handle\n");
+			devm_kfree(vop_dev->dev, vop_dev->pins);
+			vop_dev->pins = NULL;
+		} else {
+			vop_dev->pins->default_state =
+				pinctrl_lookup_state(vop_dev->pins->p, "default");
+			vop_dev->pins->sleep_state =
+				pinctrl_lookup_state(vop_dev->pins->p, "gpio");
+			if (IS_ERR(vop_dev->pins->default_state) ||
+			    IS_ERR(vop_dev->pins->sleep_state)) {
+				dev_info(vop_dev->dev, "can't find pinctrl state\n");
+				devm_kfree(vop_dev->dev, vop_dev->pins);
+				vop_dev->pins = NULL;
+			}
+		}
+	}
+
 	ret = rk_fb_register(dev_drv, vop_win, vop_dev->id);
 	if (ret < 0) {
 		dev_err(dev, "register fb for failed!\n");
@@ -2581,9 +2806,12 @@ static int vop_probe(struct platform_device *pdev)
 	return 0;
 
 err_exit:
-	clk_unprepare(vop_dev->dclk);
-	clk_unprepare(vop_dev->aclk);
-	clk_unprepare(vop_dev->hclk);
+	if (vop_dev->dclk)
+		clk_unprepare(vop_dev->dclk);
+	if (vop_dev->aclk)
+		clk_unprepare(vop_dev->aclk);
+	if (vop_dev->hclk)
+		clk_unprepare(vop_dev->hclk);
 	pm_runtime_disable(dev);
 
 	return ret;
@@ -2610,13 +2838,6 @@ static void vop_shutdown(struct platform_device *pdev)
 	vop_deinit(vop_dev);
 	rk_disp_pwr_disable(dev_drv);
 }
-
-#if defined(CONFIG_OF)
-static const struct of_device_id vop_dt_ids[] = {
-	{.compatible = "rockchip,rk3366-lcdc-lite",},
-	{}
-};
-#endif
 
 static struct platform_driver vop_driver = {
 	.probe = vop_probe,
