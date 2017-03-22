@@ -12,6 +12,12 @@
 #define NO_DUAL		0
 #define ONE_DUAL	1
 #define DUAL		2
+
+#define DEFAULT_MODE			0
+#define ONE_VOP_DUAL_MIPI_HOR_SCAN	1
+#define ONE_VOP_DUAL_MIPI_VER_SCAN	2
+#define TWO_VOP_TWO_SCREEN		3
+
 /********************************************************************
 **          display output interface supported by rockchip	   **
 ********************************************************************/
@@ -68,6 +74,7 @@
 #define COLOR_YCBCR		2
 #define COLOR_YCBCR_BT709	3
 #define COLOR_YCBCR_BT2020	4
+#define COLOR_YCBCR_BT601F	5
 
 #define IS_YUV_COLOR(x)                ((x) >= COLOR_YCBCR)
 
@@ -84,6 +91,9 @@
 
 #define DISPLAY_POLICY_SDK	0
 #define DISPLAY_POLICY_BOX	1
+
+#define SCREEN_INIT_SPI		1
+#define SCREEN_INIT_MCU		2
 
 /*      	lvds connect config       
  *                                        

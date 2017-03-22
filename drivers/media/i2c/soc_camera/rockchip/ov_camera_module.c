@@ -250,6 +250,7 @@ static int ov_camera_module_attach(
 err:
 	pltfrm_camera_module_pr_err(&cam_mod->sd,
 		"failed with error %d\n", ret);
+	ov_camera_module_release(cam_mod);
 	return ret;
 }
 
@@ -297,6 +298,10 @@ int ov_camera_module_s_fmt(struct v4l2_subdev *sd,
 		ov_camera_module_set_active_config(cam_mod,
 			ov_camera_module_find_config(cam_mod,
 				fmt, &cam_mod->frm_intrvl));
+	} else {
+		ov_camera_module_set_active_config(cam_mod,
+			ov_camera_module_find_config(cam_mod,
+				fmt, NULL));
 	}
 	return 0;
 err:
@@ -335,6 +340,8 @@ int ov_camera_module_s_frame_interval(
 	struct ov_camera_module *cam_mod = to_ov_camera_module(sd);
 	unsigned long gcdiv;
 	struct v4l2_subdev_frame_interval norm_interval;
+	struct ov_camera_module_config *config;
+	unsigned int vts;
 	int ret = 0;
 
 	if ((0 == interval->interval.denominator) ||
@@ -346,7 +353,6 @@ int ov_camera_module_s_frame_interval(
 		ret = -EINVAL;
 		goto err;
 	}
-
 	pltfrm_camera_module_pr_debug(&cam_mod->sd, "%d/%d (%dfps)\n",
 		interval->interval.numerator, interval->interval.denominator,
 		(interval->interval.denominator +
@@ -361,27 +367,89 @@ int ov_camera_module_s_frame_interval(
 	norm_interval.interval.denominator =
 		interval->interval.denominator / gcdiv;
 
-	if (IS_ERR_OR_NULL(ov_camera_module_find_config(cam_mod,
-			NULL, &norm_interval))) {
-		pltfrm_camera_module_pr_err(&cam_mod->sd,
-			"frame interval %d/%d not supported\n",
-			interval->interval.numerator,
-			interval->interval.denominator);
-		ret = -EINVAL;
-		goto err;
+	if (!cam_mod->frm_fmt_valid)
+		goto end;
+
+	config = ov_camera_module_find_config(
+			cam_mod,
+			&cam_mod->active_config->frm_fmt,
+			&norm_interval);
+
+	if (!IS_ERR_OR_NULL(config) && (config != cam_mod->active_config)) {
+		ov_camera_module_set_active_config(cam_mod, config);
+		if (cam_mod->state == OV_CAMERA_MODULE_STREAMING) {
+			cam_mod->custom.stop_streaming(cam_mod);
+			ov_camera_module_write_config(cam_mod);
+			cam_mod->custom.start_streaming(cam_mod);
+		}
+	} else {
+		if (IS_ERR_OR_NULL(cam_mod->active_config)) {
+			pltfrm_camera_module_pr_err(
+				&cam_mod->sd,
+				"no active sensor configuration");
+			ret = -EFAULT;
+			goto err;
+		}
+
+		if (cam_mod->active_config->frm_intrvl.interval.denominator <
+			norm_interval.interval.denominator) {
+			pltfrm_camera_module_pr_err(
+				&cam_mod->sd,
+				"%dx%d@%dfps isn't support!",
+				cam_mod->active_config->frm_fmt.width,
+				cam_mod->active_config->frm_fmt.height,
+				norm_interval.interval.denominator);
+			ret = -EFAULT;
+			goto err;
+		}
+
+		if (!cam_mod->custom.s_vts) {
+			pltfrm_camera_module_pr_err(
+				&cam_mod->sd,
+				"custom.s_vts isn't support!");
+			ret = -EFAULT;
+			goto err;
+		}
+
+		if (cam_mod->state != OV_CAMERA_MODULE_STREAMING)
+			goto end;
+
+		vts = cam_mod->active_config->timings.frame_length_lines;
+		vts *= cam_mod->active_config->frm_intrvl.interval.denominator;
+		vts /= norm_interval.interval.denominator;
+		cam_mod->custom.s_vts(cam_mod, vts);
 	}
+
+end:
 	cam_mod->frm_intrvl_valid = true;
 	cam_mod->frm_intrvl = norm_interval;
-	if (cam_mod->frm_fmt_valid) {
-		ov_camera_module_set_active_config(cam_mod,
-			ov_camera_module_find_config(cam_mod,
-				&cam_mod->frm_fmt, interval));
-	}
+	cam_mod->auto_adjust_fps = false;
 	return 0;
 err:
 	pltfrm_camera_module_pr_err(&cam_mod->sd,
 		"failed with error %d\n", ret);
 	return ret;
+}
+
+int ov_camera_module_g_frame_interval(
+	struct v4l2_subdev *sd,
+	struct v4l2_subdev_frame_interval *interval)
+{
+	struct ov_camera_module *cam_mod = to_ov_camera_module(sd);
+
+	if (cam_mod->active_config) {
+		if (cam_mod->state == OV_CAMERA_MODULE_STREAMING) {
+			if (cam_mod->frm_intrvl_valid) {
+				*interval = cam_mod->frm_intrvl;
+				return 0;
+			} else {
+				*interval = cam_mod->active_config->frm_intrvl;
+				return 0;
+			}
+		}
+	}
+
+	return -EFAULT;
 }
 
 /* ======================================================================== */
@@ -390,6 +458,7 @@ int ov_camera_module_s_stream(struct v4l2_subdev *sd, int enable)
 {
 	int ret = 0;
 	struct ov_camera_module *cam_mod =  to_ov_camera_module(sd);
+	unsigned int vts;
 
 	pltfrm_camera_module_pr_debug(&cam_mod->sd, "%d\n", enable);
 
@@ -417,12 +486,36 @@ int ov_camera_module_s_stream(struct v4l2_subdev *sd, int enable)
 		ret = cam_mod->custom.start_streaming(cam_mod);
 		if (IS_ERR_VALUE(ret))
 			goto err;
+
+		if (cam_mod->frm_intrvl_valid) {
+			if ((cam_mod->frm_intrvl.interval.numerator !=
+				cam_mod->active_config->frm_intrvl.interval.numerator) ||
+				(cam_mod->frm_intrvl.interval.denominator !=
+				cam_mod->active_config->frm_intrvl.interval.denominator)) {
+				if (cam_mod->frm_intrvl.interval.denominator >
+					cam_mod->active_config->frm_intrvl.interval.denominator) {
+					pltfrm_camera_module_pr_warn(&cam_mod->sd,
+						"sensor is not support stream: %dx%d@(%d/%d)fps!\n",
+						cam_mod->active_config->frm_fmt.width,
+						cam_mod->active_config->frm_fmt.height,
+						cam_mod->frm_intrvl.interval.denominator,
+						cam_mod->frm_intrvl.interval.numerator);
+					goto end;
+				}
+				vts = cam_mod->active_config->timings.frame_length_lines;
+				vts *= cam_mod->active_config->frm_intrvl.interval.denominator/
+					cam_mod->frm_intrvl.interval.denominator;
+				cam_mod->custom.s_vts(cam_mod, vts);
+			}
+		}
+
 		if (!cam_mod->inited && cam_mod->update_config)
 			cam_mod->inited = true;
 		cam_mod->update_config = false;
 		cam_mod->ctrl_updt = 0;
 		mdelay(cam_mod->custom.power_up_delays_ms[2]);
 		cam_mod->state = OV_CAMERA_MODULE_STREAMING;
+
 	} else {
 		int pclk;
 		int wait_ms;
@@ -459,6 +552,7 @@ int ov_camera_module_s_stream(struct v4l2_subdev *sd, int enable)
 		msleep(wait_ms + 1);
 	}
 
+end:
 	cam_mod->state_before_suspend = cam_mod->state;
 
 	return 0;
@@ -506,6 +600,10 @@ int ov_camera_module_s_power(struct v4l2_subdev *sd, int on)
 							 core, init, 0);
 				}
 			}
+		}
+		if (cam_mod->update_config) {
+			ov_camera_module_write_config(cam_mod);
+			cam_mod->update_config = false;
 		}
 	} else {
 		if (OV_CAMERA_MODULE_STREAMING == cam_mod->state) {
@@ -594,6 +692,16 @@ int ov_camera_module_g_ctrl(struct v4l2_subdev *sd,
 		af_ctrl = pltfrm_camera_module_get_af_ctrl(sd);
 		if (!IS_ERR_OR_NULL(af_ctrl)) {
 			ret = v4l2_subdev_call(af_ctrl, core, g_ctrl, ctrl);
+			return ret;
+		}
+	}
+
+	if (ctrl->id == V4L2_CID_BAND_STOP_FILTER) {
+		struct v4l2_subdev *ircut_ctrl;
+
+		ircut_ctrl = pltfrm_camera_module_get_ircut_ctrl(sd);
+		if (!IS_ERR_OR_NULL(ircut_ctrl)) {
+			ret = v4l2_subdev_call(ircut_ctrl, core, g_ctrl, ctrl);
 			return ret;
 		}
 	}
@@ -689,7 +797,6 @@ int ov_camera_module_s_ext_ctrls(
 	if (ctrls->count == 0)
 		return -EINVAL;
 
-
 	for (i = 0; i < ctrls->count; i++) {
 		struct v4l2_ext_control *ctrl;
 		u32 ctrl_updt = 0;
@@ -781,13 +888,36 @@ int ov_camera_module_s_ext_ctrls(
 					return ret;
 				}
 			}
-			ctrl_updt =
-				OV_CAMERA_MODULE_CTRL_UPDT_FOCUS_ABSOLUTE;
+			ctrl_updt = OV_CAMERA_MODULE_CTRL_UPDT_FOCUS_ABSOLUTE;
 			cam_mod->af_config.abs_pos = ctrl->value;
-			pltfrm_camera_module_pr_debug(&cam_mod->sd,
-			"V4L2_CID_FOCUS_ABSOLUTE %d\n",
-			ctrl->value);
+			pltfrm_camera_module_pr_debug(
+				&cam_mod->sd,
+				"V4L2_CID_FOCUS_ABSOLUTE %d\n",
+				ctrl->value);
 			break;
+		case V4L2_CID_BAND_STOP_FILTER:
+		{
+			struct v4l2_subdev *ircut_ctrl;
+
+			ircut_ctrl = pltfrm_camera_module_get_ircut_ctrl
+					(sd);
+			if (!IS_ERR_OR_NULL(ircut_ctrl)) {
+				struct v4l2_control single_ctrl;
+
+				single_ctrl.id =
+					V4L2_CID_BAND_STOP_FILTER;
+				single_ctrl.value = ctrl->value;
+				ret = v4l2_subdev_call(
+					ircut_ctrl,
+					core, s_ctrl, &single_ctrl);
+				return ret;
+			}
+			pltfrm_camera_module_pr_debug(
+				&cam_mod->sd,
+				"V4L2_CID_BAND_STOP_FILTER %d\n",
+				ctrl->value);
+			break;
+		}
 		case V4L2_CID_HFLIP:
 			if (ctrl->value)
 				cam_mod->hflip = true;
@@ -917,9 +1047,10 @@ long ov_camera_module_ioctl(struct v4l2_subdev *sd,
 		timings->fine_integration_time_min =
 			ov_timings.fine_integration_time_min;
 
-		if (cam_mod->custom.g_exposure_valid_frame)
-			timings->exposure_valid_frame =
-				cam_mod->custom.g_exposure_valid_frame(cam_mod);
+		timings->exposure_valid_frame[0] =
+			cam_mod->custom.exposure_valid_frame[0];
+		timings->exposure_valid_frame[1] =
+			cam_mod->custom.exposure_valid_frame[1];
 		if (cam_mod->exp_config.exp_time)
 			timings->exp_time = cam_mod->exp_config.exp_time;
 		else
@@ -950,8 +1081,14 @@ long ov_camera_module_ioctl(struct v4l2_subdev *sd,
 		pltfrm_camera_module_ioctl(sd, PLTFRM_CIFCAM_G_ITF_CFG, arg);
 		return 0;
 	} else if (cmd == PLTFRM_CIFCAM_ATTACH) {
-		pltfrm_camera_module_ioctl(sd, cmd, arg);
-		return ov_camera_module_attach(cam_mod);
+		ret = ov_camera_module_init(cam_mod, &cam_mod->custom);
+		if (!IS_ERR_VALUE(ret)) {
+			pltfrm_camera_module_ioctl(sd, cmd, arg);
+			return ov_camera_module_attach(cam_mod);
+		} else {
+			ov_camera_module_release(cam_mod);
+			return ret;
+		}
 	} else {
 		ret = pltfrm_camera_module_ioctl(sd, cmd, arg);
 		return ret;
@@ -1079,7 +1216,6 @@ int ov_camera_module_init(struct ov_camera_module *cam_mod,
 
 	pltfrm_camera_module_pr_debug(&cam_mod->sd, "\n");
 
-	cam_mod->custom = *custom;
 	ov_camera_module_reset(cam_mod);
 
 	if (IS_ERR_OR_NULL(custom->start_streaming) ||
@@ -1142,6 +1278,7 @@ void ov_camera_module_release(struct ov_camera_module *cam_mod)
 		destroy_workqueue(cam_mod->otp_work.wq);
 		cam_mod->otp_work.wq = NULL;
 	}
+
 	cam_mod->custom.configs = NULL;
 
 	pltfrm_camera_module_release(&cam_mod->sd);

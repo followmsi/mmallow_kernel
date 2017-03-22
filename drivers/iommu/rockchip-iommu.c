@@ -594,7 +594,9 @@ static irqreturn_t rockchip_iommu_irq(int irq, void *dev_id)
 				report_iommu_fault(data->domain, data->iommu,
 						   fault_address, flags);
 			if (data->fault_handler)
-				data->fault_handler(data->master, IOMMU_PAGEFAULT, dte, fault_address, 1);
+				data->fault_handler(data->master,
+						    IOMMU_PAGEFAULT, dte,
+						    fault_address, reg_status);
 
 			rockchip_iommu_page_fault_done(data->res_bases[i],
 					               data->dbgname);
@@ -1222,6 +1224,8 @@ static const struct of_device_id iommu_dt_ids[] = {
 	{ .compatible = ISP_IOMMU_COMPATIBLE_NAME},
 	{ .compatible = VOP_IOMMU_COMPATIBLE_NAME},
 	{ .compatible = VDEC_IOMMU_COMPATIBLE_NAME},
+	{ .compatible = H265E_IOMMU_COMPATIBLE_NAME},
+	{ .compatible = VEPU_IOMMU_COMPATIBLE_NAME},
 	{ /* end */ }
 };
 

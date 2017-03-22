@@ -31,7 +31,6 @@
 /* dma pool buffer size 1K */
 #define DSP_DMA_POOL_BUFFER_SIZE    (1 * 1024)
 
-#define DSP_WORK_TIMEOUT_MS  500
 #define DSP_SESSION_ID_START 1000
 
 /*
@@ -150,8 +149,8 @@ static int dsp_dequeue_work(struct dsp_session *session,
 
 	dsp_debug_enter();
 
-	timeout = wait_event_timeout(session->wait, !list_empty(&session->done),
-				     DSP_WORK_TIMEOUT_MS);
+	timeout = wait_event_timeout(session->wait,
+				     !list_empty(&session->done), HZ);
 	if (unlikely(timeout <= 0)) {
 		dsp_err("dequeue work timeout\n");
 		ret = -EBUSY;
@@ -277,18 +276,22 @@ static int dsp_work_consume(void *data)
 
 	dsp_debug_enter();
 
-	service->dev->config(service->dev);
-
 	while (!kthread_should_stop()) {
-		if (!wait_event_timeout(service->wait,
-					!list_empty(&service->pending), HZ))
-			continue;
+		wait_event_interruptible_timeout(service->wait,
+						 !list_empty(&service->pending),
+						 HZ);
 
 		mutex_lock(&service->lock);
+		if (list_empty(&service->pending)) {
+			mutex_unlock(&service->lock);
+			continue;
+		}
+
 		work = list_first_entry(&service->pending,
 					struct dsp_work, list_node);
 		list_del(&work->list_node);
 		list_add_tail(&work->list_node, &service->running);
+
 		mutex_unlock(&service->lock);
 
 		dsp_debug(DEBUG_SERVICE, "consume a work=0x%08x\n", work->id);
@@ -329,6 +332,22 @@ static int dsp_work_done(struct dsp_dev_client *client, struct dsp_work *work)
 	return ret;
 }
 
+static int dsp_device_pause(struct dsp_dev_client *client)
+{
+	struct dsp_service *service =
+		container_of(client, struct dsp_service, dev_client);
+
+	dsp_debug_enter();
+
+	/* Wake up work consumer thread and stop it */
+	wake_up(&service->wait);
+	kthread_stop(service->work_consumer);
+	service->work_consumer = NULL;
+
+	dsp_debug_leave();
+	return 0;
+}
+
 /*
  * dsp_device_ready - a callback function will be called when
  * DSP core is ready to work.
@@ -337,14 +356,15 @@ static int dsp_work_done(struct dsp_dev_client *client, struct dsp_work *work)
  */
 static int dsp_device_ready(struct dsp_dev_client *client)
 {
-	int ret = 0;
 	struct dsp_service *service = client->data;
 
 	dsp_debug_enter();
-	service->work_consumer = kthread_run(dsp_work_consume, service,
-				"dsp_work_consumer");
+	if (service->work_consumer == NULL)
+		service->work_consumer = kthread_run(dsp_work_consume,
+						     service,
+						     "dsp_work_consumer");
 	dsp_debug_leave();
-	return ret;
+	return 0;
 }
 
 /*
@@ -369,6 +389,7 @@ static int dsp_service_prepare(struct platform_device *pdev,
 
 	service->dev_client.data = service;
 	service->dev_client.device_ready = dsp_device_ready;
+	service->dev_client.device_pause = dsp_device_pause;
 	service->dev_client.work_done = dsp_work_done;
 
 	atomic_set(&service->ref, 0);
@@ -422,6 +443,7 @@ static int dsp_service_release(struct dsp_service *service)
 	}
 
 	kthread_stop(service->work_consumer);
+	service->work_consumer = NULL;
 
 	dma_pool_destroy(service->dma_pool);
 	ret = dsp_dev_destroy(service->dev);
@@ -473,7 +495,7 @@ static long dsp_ioctl(struct file *filp, unsigned int cmd,
 			struct dsp_user_work user_work;
 
 			if (ret == -EBUSY) {
-				user_work.hdl = 0;
+				user_work.id = 0;
 				user_work.result = DSP_WORK_ETIMEOUT;
 			}
 			if (copy_to_user((void __user *)arg,
@@ -511,9 +533,15 @@ static int dsp_open(struct inode *inode, struct file *filp)
 		goto out;
 	}
 
-	/* Power on DSP if service has more than one session */
-	if (atomic_read(&service->ref))
-		service->dev->on(service->dev);
+	/* Power on DSP if first session is created. */
+	if (atomic_read(&service->ref) == 1) {
+		ret = service->dev->on(service->dev);
+		if (ret) {
+			dsp_session_destroy(session);
+			dsp_err("power on dsp device failed\n");
+			goto out;
+		}
+	}
 
 	filp->private_data = session;
 out:

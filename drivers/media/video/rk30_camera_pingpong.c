@@ -213,6 +213,9 @@ static u32 CHIP_NAME;
 
 #define rk3368_write_cru_reg(addr, val)            __raw_writel(val, addr+rk_cif_cru_base)
 #define rk3368_read_cru_reg(addr)                  __raw_readl(addr+rk_cif_cru_base)
+#define write_grf_reg(addr, val)            __raw_writel(val, addr+rk_cif_grf_base)
+#define read_grf_reg(addr)                  __raw_readl(addr+rk_cif_grf_base)
+
 #define rk3368_mask_cru_reg(addr, msk, val)        rk3368_write_cru_reg(addr,(val)|((~(msk))&rk3368_read_cru_reg(addr)))
 
 /*********yzm*********end*/
@@ -292,8 +295,10 @@ static u32 CHIP_NAME;
 		 3. Move Camera Sensor Macro from rk_camera.h to rk_camera_sensor_info.h
 *v0.1.a:
 		1. Support rk3368.
+*v0.2.0:
+		1. Support rk322xh.
 */
-#define RK_CAM_VERSION_CODE KERNEL_VERSION(0, 1, 0xa)
+#define RK_CAM_VERSION_CODE KERNEL_VERSION(0, 2, 0)
 static int version = RK_CAM_VERSION_CODE;
 module_param(version, int, S_IRUGO);
 
@@ -391,9 +396,10 @@ struct rk_cif_clk
     /************must modify start************/
 	struct clk *pd_cif;
 	struct clk *aclk_cif;
-    struct clk *hclk_cif;
-    struct clk *cif_clk_in;
-    struct clk *cif_clk_out;
+	struct clk *hclk_cif;
+	struct clk *cif_clk_in;
+	struct clk *cif_clk_out;
+	struct clk *pclk_cif;
 	/************must modify end************/
 
    // spinlock_t lock;
@@ -518,7 +524,8 @@ static void rk_camera_diffchips(const char *rockchip_name)
 		CRU_CLKSEL29_CON = 0xb8;
 
 		CHIP_NAME = 3126;
-	}else if(strstr(rockchip_name,"3368"))
+	} else if (strstr(rockchip_name, "3368") ||
+		   strstr(rockchip_name, "px5"))
 	{	
 		CRU_PCLK_REG30 = 0x154;
 		ENANABLE_INVERT_PCLK_CIF0 = ((0x1<<29)|(0x1<<13));
@@ -528,6 +535,13 @@ static void rk_camera_diffchips(const char *rockchip_name)
 
 		//CRU_CLK_OUT = 0x16c;
 		CHIP_NAME = 3368;
+	} else if (strstr(rockchip_name, "3228h")) {
+		CRU_PCLK_REG30 = 0x0410;
+		ENANABLE_INVERT_PCLK_CIF0 = ((0x1<<31)|(0x1<<15));
+		DISABLE_INVERT_PCLK_CIF0  = ((0x1<<31)|(0x0<<15));
+		ENANABLE_INVERT_PCLK_CIF1 = ENANABLE_INVERT_PCLK_CIF0;
+		DISABLE_INVERT_PCLK_CIF1  = DISABLE_INVERT_PCLK_CIF0;
+		CHIP_NAME = 3228;
 	}
 }
 static inline void rk_cru_set_soft_reset(u32 idx, bool on , u32 RK_CRU_SOFTRST_CON)
@@ -535,7 +549,7 @@ static inline void rk_cru_set_soft_reset(u32 idx, bool on , u32 RK_CRU_SOFTRST_C
 	u32 val = 0;
 	void __iomem *reg;
 	
-	if(CHIP_NAME == 3368)
+	if (CHIP_NAME == 3368 || CHIP_NAME == 3228)
 		reg = (void*)(rk_cif_cru_base + RK_CRU_SOFTRST_CON);
 	else
 		reg = (void*)(RK_CRU_VIRT + RK_CRU_SOFTRST_CON);
@@ -544,19 +558,25 @@ static inline void rk_cru_set_soft_reset(u32 idx, bool on , u32 RK_CRU_SOFTRST_C
 		val = on ? 0x10001U << 14 : 0x10000U << 14;
 	}else if(CHIP_NAME == 3368){
 		val = on ? 0x10001U << 8 : 0x10000U << 8;
+	} else if (CHIP_NAME == 3228) {
+		val = on ? 0x00380038 : 0x00380000U;
 	}
 	writel_relaxed(val, reg);
-	dsb();
+	/* dsb(); */
 }
 
 static void rk_camera_cif_reset(struct rk_camera_dev *pcdev, int only_rst)
 {
     int ctrl_reg,inten_reg,crop_reg,set_size_reg,for_reg,vir_line_width_reg,scl_reg,y_reg,uv_reg;
+	int y1_reg, uv1_reg;
 	u32 RK_CRU_SOFTRST_CON = 0;
 	debug_printk( "/$$$$$$$$$$$$$$$$$$$$$$//n Here I am: %s:%i-------%s()\n", __FILE__, __LINE__,__FUNCTION__);
 	if(strstr(pcdev->pdata->rockchip_name,"3128")||strstr(pcdev->pdata->rockchip_name,"3126"))
 		RK_CRU_SOFTRST_CON = RK312X_CRU_SOFTRSTS_CON(6);
-	else if(strstr(pcdev->pdata->rockchip_name,"3368"))
+	else if (strstr(pcdev->pdata->rockchip_name, "3228h"))
+		RK_CRU_SOFTRST_CON = 0x0324;
+	else if (strstr(pcdev->pdata->rockchip_name, "3368") ||
+		 strstr(pcdev->pdata->rockchip_name, "px5"))
 		RK_CRU_SOFTRST_CON = RK3368_CRU_SOFTRSTS_CON(6);
 	
 	if (only_rst == true) {
@@ -576,6 +596,8 @@ static void rk_camera_cif_reset(struct rk_camera_dev *pcdev, int only_rst)
     	scl_reg = read_cif_reg(pcdev->base,CIF_CIF_SCL_CTRL);
     	y_reg = read_cif_reg(pcdev->base, CIF_CIF_FRM0_ADDR_Y);
     	uv_reg = read_cif_reg(pcdev->base, CIF_CIF_FRM0_ADDR_UV);
+		y1_reg = read_cif_reg(pcdev->base, CIF_CIF_FRM1_ADDR_Y);
+		uv1_reg = read_cif_reg(pcdev->base, CIF_CIF_FRM1_ADDR_UV);
     	
     	rk_cru_set_soft_reset(0, true ,RK_CRU_SOFTRST_CON);
     	udelay(5);
@@ -586,10 +608,13 @@ static void rk_camera_cif_reset(struct rk_camera_dev *pcdev, int only_rst)
 	    write_cif_reg(pcdev->base,CIF_CIF_CROP, crop_reg);
 	    write_cif_reg(pcdev->base,CIF_CIF_SET_SIZE, set_size_reg);
 	    write_cif_reg(pcdev->base,CIF_CIF_FOR, for_reg);
-	    write_cif_reg(pcdev->base,CIF_CIF_VIR_LINE_WIDTH,vir_line_width_reg);
+		write_cif_reg(pcdev->base, CIF_CIF_VIR_LINE_WIDTH,
+			      vir_line_width_reg);
 	    write_cif_reg(pcdev->base,CIF_CIF_SCL_CTRL,scl_reg);
 	    write_cif_reg(pcdev->base,CIF_CIF_FRM0_ADDR_Y,y_reg);      /*ddl@rock-chips.com v0.3.0x13 */
 	    write_cif_reg(pcdev->base,CIF_CIF_FRM0_ADDR_UV,uv_reg);
+		write_cif_reg(pcdev->base, CIF_CIF_FRM1_ADDR_Y, y1_reg);
+		write_cif_reg(pcdev->base, CIF_CIF_FRM1_ADDR_UV, uv1_reg);
     }
     return;
 }
@@ -1156,26 +1181,27 @@ static inline irqreturn_t rk_camera_dmairq(int irq, void *data)
             goto end;
         }
 
-        if (!list_empty(&pcdev->capture)) {
-			active_buf = list_entry(pcdev->capture.next, struct videobuf_buffer, queue);
-            if (active_buf) {
-                
-                WARN_ON(active_buf->state != VIDEOBUF_QUEUED);
-				if ((flag == 0) && ((active_buf->i)%2 == 0)){					
-			        pcdev->active0 = active_buf;
-        		} else if ((flag == 1) && ((active_buf->i)%2 == 1)){
-			        pcdev->active1 = active_buf;
-        		}else{
-                    RKCAMERA_DG1("irq frame status erro or no a suitable buf!\n");
+		if (!list_empty(&pcdev->capture)) {
+			active_buf = list_entry(pcdev->capture.next,
+						struct videobuf_buffer,
+						queue);
+			if (active_buf) {
+				WARN_ON(active_buf->state != VIDEOBUF_QUEUED);
+				if (flag == 0) {
+					pcdev->active0 = active_buf;
+				} else if (flag == 1) {
+					pcdev->active1 = active_buf;
+				} else {
+					RKCAMERA_DG1("irq frame status erro or no a suitable buf!\n");
 					goto end;
-        		}
+				}
 				rk_videobuf_capture(active_buf,pcdev,flag);
 				list_del_init(&(active_buf->queue));
-            }
-        }else{
+			}
+		} else {
 			RKCAMERA_DG1("video_buf queue is empty!\n");
 			goto end;
-        }
+		}
         		
         do_gettimeofday(&vb->ts);
         if (CAM_WORKQUEUE_IS_EN()) {
@@ -1313,55 +1339,66 @@ static void rk_camera_init_videobuf(struct videobuf_queue *q,
 
 static int rk_camera_mclk_ctrl(int cif_idx, int on, int clk_rate)
 {
-    int err = 0,cif;    
-    struct rk_cif_clk *clk;
+	int err = 0, cif;
+	struct rk_cif_clk *clk;
 
 	debug_printk( "/$$$$$$$$$$$$$$$$$$$$$$//n Here I am: %s:%i-------%s()\n", __FILE__, __LINE__,__FUNCTION__);
 
+	cif = cif_idx - RK29_CAM_PLATFORM_DEV_ID;
+	if ((cif < 0) || (cif > 1)) {
+		RKCAMERA_TR(KERN_ERR "cif index(%d) is invalidate\n", cif_idx);
+		err = -1;
+		goto rk_camera_clk_ctrl_end;
+	}
 
-    cif = cif_idx - RK29_CAM_PLATFORM_DEV_ID;
-    if ((cif<0)||(cif>1)) {
-        RKCAMERA_TR(KERN_ERR "cif index(%d) is invalidate\n",cif_idx);
-        err = -1;
-        goto rk_camera_clk_ctrl_end;
-    } 
-
-    clk = &cif_clk[cif];
-   
-    if(!clk->aclk_cif || !clk->hclk_cif || !clk->cif_clk_in || !clk->cif_clk_out) {
-        RKCAMERA_TR(KERN_ERR "failed to get cif clock source\n");
-        err = -ENOENT;
-        goto rk_camera_clk_ctrl_end;
-    }
-   
-    //spin_lock(&clk->lock);
-    if (on && !clk->on) {
-		if(CHIP_NAME != 3368)
-        	clk_prepare_enable(clk->pd_cif);    /*yzm*/
-        clk_prepare_enable(clk->aclk_cif);
-    	clk_prepare_enable(clk->hclk_cif);
-    	clk_prepare_enable(clk->cif_clk_in);
-    	clk_prepare_enable(clk->cif_clk_out);
-        clk_set_rate(clk->cif_clk_out,clk_rate);
-        clk->on = true;
-    } else if (!on && clk->on) {
+	clk = &cif_clk[cif];
+	if (CHIP_NAME == 3228) {
+		if (!clk->aclk_cif || !clk->hclk_cif || !clk->cif_clk_out) {
+			RKCAMERA_TR(KERN_ERR "failed to get cif clock source\n");
+			err = -ENOENT;
+			goto rk_camera_clk_ctrl_end;
+		}
+	} else{
+		if (!clk->aclk_cif || !clk->hclk_cif || !clk->cif_clk_in || !clk->cif_clk_out) {
+			RKCAMERA_TR(KERN_ERR "failed to get cif clock source\n");
+			err = -ENOENT;
+			goto rk_camera_clk_ctrl_end;
+		}
+	}
+	/*spin_lock(&clk->lock);*/
+	if (on && !clk->on) {
+		if (CHIP_NAME != 3228)
+			clk_prepare_enable(clk->pd_cif);
+		if (CHIP_NAME == 3368)
+			clk_prepare_enable(clk->pclk_cif);
+		clk_prepare_enable(clk->aclk_cif);
+		clk_prepare_enable(clk->hclk_cif);
+		if (CHIP_NAME != 3228)
+			clk_prepare_enable(clk->cif_clk_in);
+		clk_prepare_enable(clk->cif_clk_out);
+		clk_set_rate(clk->cif_clk_out, clk_rate);
+		clk->on = true;
+	} else if (!on && clk->on) {
 		clk_set_rate(clk->cif_clk_out,36000000);/*yzm :just for close clk which base on XIN24M */
-    	msleep(100);
-        clk_disable_unprepare(clk->aclk_cif);
-    	clk_disable_unprepare(clk->hclk_cif);
-    	clk_disable_unprepare(clk->cif_clk_in);
+		msleep(100);
+		clk_disable_unprepare(clk->aclk_cif);
+		clk_disable_unprepare(clk->hclk_cif);
+		if (CHIP_NAME != 3228)
+			clk_disable_unprepare(clk->cif_clk_in);
 		if(CHIP_NAME == 3126){
 			write_cru_reg(CRU_CLKSEL29_CON, 0x007c0000);
 			write_cru_reg(CRU_CLK_OUT, 0x00800080);
 		}
-    	clk_disable_unprepare(clk->cif_clk_out);
-		if(CHIP_NAME != 3368)
-	    	clk_disable_unprepare(clk->pd_cif);
-        clk->on = false;
-    }
-    //spin_unlock(&clk->lock);
+		clk_disable_unprepare(clk->cif_clk_out);
+		if (CHIP_NAME != 3228)
+			clk_disable_unprepare(clk->pd_cif);
+		if (CHIP_NAME == 3368)
+			clk_disable_unprepare(clk->pclk_cif);
+		clk->on = false;
+	}
+	/*spin_unlock(&clk->lock);*/
 rk_camera_clk_ctrl_end:
-    return err;
+	return err;
 }
 static int rk_camera_activate(struct rk_camera_dev *pcdev, struct soc_camera_device *icd)
 {
@@ -1624,6 +1661,10 @@ static int rk_camera_set_bus_param(struct soc_camera_device *icd, __u32 pixfmt)
        	if(IS_CIF0()) {
 			if(CHIP_NAME == 3368)
     			rk3368_write_cru_reg(CRU_PCLK_REG30, rk3368_read_cru_reg(CRU_PCLK_REG30) | ENANABLE_INVERT_PCLK_CIF0);
+			else if (CHIP_NAME == 3228)
+				write_grf_reg(CRU_PCLK_REG30,
+						read_grf_reg(CRU_PCLK_REG30) |
+						ENANABLE_INVERT_PCLK_CIF0);
 			else
 				write_cru_reg(CRU_PCLK_REG30, read_cru_reg(CRU_PCLK_REG30) | ENANABLE_INVERT_PCLK_CIF0);
         } else {
@@ -1636,6 +1677,10 @@ static int rk_camera_set_bus_param(struct soc_camera_device *icd, __u32 pixfmt)
 		if(IS_CIF0()){
 			if(CHIP_NAME == 3368)
 				rk3368_write_cru_reg(CRU_PCLK_REG30, (rk3368_read_cru_reg(CRU_PCLK_REG30) & 0xFFFFEFF ) | DISABLE_INVERT_PCLK_CIF0);
+			else if (CHIP_NAME == 3228)
+				write_grf_reg(CRU_PCLK_REG30,
+					(read_grf_reg(CRU_PCLK_REG30) & 0xFFFF7FFF) |
+					DISABLE_INVERT_PCLK_CIF0);
 			else
 				write_cru_reg(CRU_PCLK_REG30, (read_cru_reg(CRU_PCLK_REG30) & 0xFFFFEFF ) | DISABLE_INVERT_PCLK_CIF0);
         } else {
@@ -1739,11 +1784,37 @@ static const struct soc_mbus_pixelfmt rk_camera_formats[] = {
 static void rk_camera_setup_format(struct soc_camera_device *icd, __u32 host_pixfmt, enum v4l2_mbus_pixelcode icd_code, struct v4l2_rect *rect)
 {
 	struct soc_camera_host *ici = to_soc_camera_host(icd->parent);/*yzm*/
-    struct rk_camera_dev *pcdev = ici->priv;
-    unsigned int cif_fs = 0,cif_crop = 0;
-    unsigned int cif_fmt_val = read_cif_reg(pcdev->base,CIF_CIF_FOR) | INPUT_MODE_YUV|YUV_INPUT_422|INPUT_420_ORDER_EVEN|OUTPUT_420_ORDER_EVEN;
-	
+	struct rk_camera_dev *pcdev = ici->priv;
+	struct v4l2_subdev *sd = soc_camera_to_subdev(icd);
+	unsigned int cif_fs = 0, cif_crop = 0;
+	unsigned int cif_fmt_val;
+
 	const struct soc_mbus_pixelfmt *fmt;
+
+	struct rk_camera_device_signal_config dev_sig_cnf;
+
+	v4l2_subdev_call(sd, core, ioctl, RK29_CAM_SUBDEV_GET_INTERFACE, &dev_sig_cnf);
+	if (dev_sig_cnf.type == RK_CAMERA_DEVICE_CVBS_NTSC)
+		cif_fmt_val = INPUT_MODE_NTSC | YUV_OUTPUT_420;
+	else if (dev_sig_cnf.type == RK_CAMERA_DEVICE_CVBS_PAL)
+		cif_fmt_val = INPUT_MODE_PAL | YUV_OUTPUT_420;
+	else
+		cif_fmt_val = INPUT_MODE_YUV | YUV_INPUT_422 | INPUT_420_ORDER_EVEN | OUTPUT_420_ORDER_EVEN;
+
+	if (dev_sig_cnf.type == RK_CAMERA_DEVICE_BT601_8) {
+		if (dev_sig_cnf.dvp.vsync == RK_CAMERA_DEVICE_SIGNAL_HIGH_LEVEL)
+			cif_fmt_val |= VSY_HIGH_ACTIVE;
+		else
+			cif_fmt_val |= VSY_LOW_ACTIVE;
+
+		if (dev_sig_cnf.dvp.hsync == RK_CAMERA_DEVICE_SIGNAL_HIGH_LEVEL)
+			cif_fmt_val |= HSY_HIGH_ACTIVE;
+		else
+			cif_fmt_val |= HSY_LOW_ACTIVE;
+	}
+
+	if (dev_sig_cnf.code)
+		icd_code = dev_sig_cnf.code;
 	fmt = soc_mbus_get_fmtdesc(icd_code);
 
 	debug_printk( "/$$$$$$$$$$$$$$$$$$$$$$//n Here I am: %s:%i-------%s()/n", __FILE__, __LINE__,__FUNCTION__);
@@ -1819,8 +1890,13 @@ static void rk_camera_setup_format(struct soc_camera_device *icd, __u32 host_pix
 		||(read_cif_reg(pcdev->base,CIF_CIF_CTRL) & MODE_LINELOOP)) {
 	    BUG();	
     } else*/{ /* this is one frame mode*/
-	    cif_crop = (rect->left + (rect->top <<16));
-	    cif_fs	= (rect->width + (rect->height <<16));
+		cif_crop = ((rect->left + dev_sig_cnf.crop.left) +
+			((rect->top + dev_sig_cnf.crop.top) << 16));
+		if (dev_sig_cnf.crop.width)
+			cif_fs = (dev_sig_cnf.crop.width +
+				(dev_sig_cnf.crop.height << 16));
+		else
+			cif_fs	= (rect->width + (rect->height << 16));
 	}
 
 	write_cif_reg(pcdev->base,CIF_CIF_CROP, cif_crop);
@@ -2011,6 +2087,26 @@ static bool rk_camera_fmt_capturechk(struct v4l2_format *f)
 		RKCAMERA_DG1("%dx%d is capture format\n",f->fmt.pix.width, f->fmt.pix.height);
 	return ret;
 }
+
+static int rk_camera_get_fmt(struct soc_camera_device *icd,
+			     struct v4l2_format *f)
+{
+	struct v4l2_pix_format *pix = &f->fmt.pix;
+	struct v4l2_subdev *sd = soc_camera_to_subdev(icd);
+	struct rk_camera_device_signal_config dev_sig_cnf;
+
+	v4l2_subdev_call(sd, core, ioctl,
+			 RK29_CAM_SUBDEV_GET_INTERFACE, &dev_sig_cnf);
+	if (dev_sig_cnf.crop.width > 32 && dev_sig_cnf.crop.width <= 8192) {
+		pix->width = dev_sig_cnf.crop.width;
+		pix->height = dev_sig_cnf.crop.height;
+		RKCAMERA_DG1("rk_camera_get_fmt: f->fmt->pixsize %dx%d\n",
+			     f->fmt.pix.width, f->fmt.pix.height);
+	}
+
+	return 0;
+}
+
 static int rk_camera_set_fmt(struct soc_camera_device *icd,
 			      struct v4l2_format *f)
 {
@@ -2567,6 +2663,9 @@ static void rk_camera_reinit_work(struct work_struct *work)
 		RKCAMERA_TR("CIF_CIF_SCL_CTRL = 0x%x\n",read_cif_reg(pcdev->base,CIF_CIF_SCL_CTRL));
 		if(CHIP_NAME == 3368)
 			RKCAMERA_TR("CRU_PCLK_REG30 = 0X%x\n",rk3368_read_cru_reg(CRU_PCLK_REG30));
+		else if (CHIP_NAME == 3228)
+			RKCAMERA_TR("CRU_PCLK_REG30 = 0X%x\n",
+									read_grf_reg(CRU_PCLK_REG30));
 		else
 			RKCAMERA_TR("CRU_PCLK_REG30 = 0X%x\n",read_cru_reg(CRU_PCLK_REG30));
 		RKCAMERA_TR("CIF_CIF_LAST_LINE = 0X%x\n",read_cif_reg(pcdev->base,CIF_CIF_LAST_LINE));
@@ -2760,8 +2859,8 @@ static int rk_camera_s_stream(struct soc_camera_device *icd, int enable)
 		cif_ctrl_val |= ENABLE_CAPTURE;
         write_cif_reg(pcdev->base,CIF_CIF_CTRL, cif_ctrl_val);
         spin_unlock_irqrestore(&pcdev->lock,flags);
-        printk("%s:stream enable CIF_CIF_CTRL 0x%lx\n",__func__,read_cif_reg(pcdev->base,CIF_CIF_CTRL));
-		hrtimer_start(&(pcdev->fps_timer.timer),ktime_set(3, 0),HRTIMER_MODE_REL);
+	RKCAMERA_DG1("%s:stream enable CIF_CIF_CTRL 0x%x\n", __func__, read_cif_reg(pcdev->base, CIF_CIF_CTRL));
+		hrtimer_start(&(pcdev->fps_timer.timer), ktime_set(3, 0), HRTIMER_MODE_REL);
         pcdev->fps_timer.istarted = true;
 	} else {
 	    /*cancel timer before stop cif*/
@@ -3057,28 +3156,29 @@ rk_camera_set_ctrl_end:
 
 static struct soc_camera_host_ops rk_soc_camera_host_ops =
 {
-    .owner		= THIS_MODULE,
-    .add		= rk_camera_add_device,
-    .remove		= rk_camera_remove_device,
-    .suspend	= rk_camera_suspend,
-    .resume		= rk_camera_resume,
-    .enum_frameinervals = rk_camera_enum_frameintervals,
-    .cropcap    = rk_camera_cropcap,
-    .set_crop	= rk_camera_set_crop,
-    .get_crop   = rk_camera_get_crop,
-    .get_formats	= rk_camera_get_formats, 
-    .put_formats	= rk_camera_put_formats,
-    .set_fmt	= rk_camera_set_fmt,
-    .try_fmt	= rk_camera_try_fmt,
-    .init_videobuf	= rk_camera_init_videobuf,
-    .reqbufs	= rk_camera_reqbufs,
-    .poll		= rk_camera_poll,
-    .querycap	= rk_camera_querycap,
-    .set_bus_param	= rk_camera_set_bus_param,
-    .s_stream = rk_camera_s_stream,   /* ddl@rock-chips.com : Add stream control for host */
-    .set_ctrl = rk_camera_set_ctrl,
-    .controls = rk_camera_controls,
-    .num_controls = ARRAY_SIZE(rk_camera_controls)
+	.owner			= THIS_MODULE,
+	.add			= rk_camera_add_device,
+	.remove			= rk_camera_remove_device,
+	.suspend		= rk_camera_suspend,
+	.resume			= rk_camera_resume,
+	.enum_frameinervals	= rk_camera_enum_frameintervals,
+	.cropcap		= rk_camera_cropcap,
+	.set_crop		= rk_camera_set_crop,
+	.get_crop		= rk_camera_get_crop,
+	.get_formats		= rk_camera_get_formats,
+	.put_formats		= rk_camera_put_formats,
+	.get_fmt		= rk_camera_get_fmt,
+	.set_fmt		= rk_camera_set_fmt,
+	.try_fmt		= rk_camera_try_fmt,
+	.init_videobuf		= rk_camera_init_videobuf,
+	.reqbufs		= rk_camera_reqbufs,
+	.poll			= rk_camera_poll,
+	.querycap		= rk_camera_querycap,
+	.set_bus_param		= rk_camera_set_bus_param,
+	.s_stream		= rk_camera_s_stream,   /* ddl@rock-chips.com : Add stream control for host */
+	.set_ctrl		= rk_camera_set_ctrl,
+	.controls		= rk_camera_controls,
+	.num_controls		= ARRAY_SIZE(rk_camera_controls)
 };
 
 /**********yzm***********/
@@ -3091,7 +3191,7 @@ static int rk_camera_cif_iomux(struct device *dev)
     char state_str[20] = {0};
 
 	debug_printk( "/$$$$$$$$$$$$$$$$$$$$$$//n Here I am: %s:%i-------%s()\n", __FILE__, __LINE__,__FUNCTION__);
-	if(CHIP_NAME == 3368)
+	if (CHIP_NAME == 3368 || CHIP_NAME == 3228)
 		strcpy(state_str,"cif_pin_all");
 	else
 	    strcpy(state_str,"cif_pin_jpe");
@@ -3183,26 +3283,34 @@ static int rk_camera_probe(struct platform_device *pdev)
 	/***********yzm***********/
 	if (IS_CIF0()) {
 		debug_printk( "/$$$$$$$$$$$$$$$$$$$$$$/is_cif0\n");
-        clk = &cif_clk[0];
-		if(CHIP_NAME != 3368)
-	        cif_clk[0].pd_cif = devm_clk_get(dev_cif, "pd_cif0");
-        cif_clk[0].aclk_cif = devm_clk_get(dev_cif, "aclk_cif0");
-        cif_clk[0].hclk_cif = devm_clk_get(dev_cif, "hclk_cif0");
-        cif_clk[0].cif_clk_in = devm_clk_get(dev_cif, "cif0_in");
-        cif_clk[0].cif_clk_out = devm_clk_get(dev_cif, "cif0_out");
-        //spin_lock_init(&cif_clk[0].lock);
-        cif_clk[0].on = false;
-        rk_camera_cif_iomux(dev_cif);/*yzm*/
+		clk = &cif_clk[0];
+		if (CHIP_NAME != 3228)
+			cif_clk[0].pd_cif = devm_clk_get(dev_cif, "pd_cif0");
+		if (CHIP_NAME == 3368)
+			cif_clk[0].pclk_cif =
+				devm_clk_get(dev_cif, "pclk_cif");
+		cif_clk[0].aclk_cif = devm_clk_get(dev_cif, "aclk_cif0");
+		cif_clk[0].hclk_cif = devm_clk_get(dev_cif, "hclk_cif0");
+		if (CHIP_NAME != 3228)
+			cif_clk[0].cif_clk_in =
+				devm_clk_get(dev_cif, "cif0_in");
+		cif_clk[0].cif_clk_out = devm_clk_get(dev_cif, "cif0_out");
+		/* spin_lock_init(&cif_clk[0].lock); */
+		cif_clk[0].on = false;
+		rk_camera_cif_iomux(dev_cif);/*yzm*/
     } else {
     	clk = &cif_clk[1];
-		if(CHIP_NAME != 3368)
-	        cif_clk[1].pd_cif = devm_clk_get(dev_cif, "pd_cif0");/*cif0  only yzm*/
+		if (CHIP_NAME != 3368 && CHIP_NAME != 3228)
+			cif_clk[1].pd_cif = devm_clk_get(dev_cif, "pd_cif0");
         cif_clk[1].aclk_cif = devm_clk_get(dev_cif, "aclk_cif0");
         cif_clk[1].hclk_cif = devm_clk_get(dev_cif, "hclk_cif0");
-        cif_clk[1].cif_clk_in = devm_clk_get(dev_cif, "cif0_in");
+		if (CHIP_NAME != 3228)
+			cif_clk[1].cif_clk_in = devm_clk_get(dev_cif, "cif0_in");
         cif_clk[1].cif_clk_out = devm_clk_get(dev_cif, "cif0_out");
-        //spin_lock_init(&cif_clk[1].lock);
-        cif_clk[1].on = false;
+		if (CHIP_NAME != 3228)
+			cif_clk[1].pclk_cif = devm_clk_get(dev_cif, "pclk_cif");
+	/*spin_lock_init(&cif_clk[1].lock);*/
+	cif_clk[1].on = false;
         rk_camera_cif_iomux(dev_cif);/*yzm*/
     }
 
@@ -3252,14 +3360,14 @@ static int rk_camera_probe(struct platform_device *pdev)
 
     /* config buffer address */
     /* request irq */
-    if(irq > 0){
-        err = request_irq(pcdev->irqinfo.irq, rk_camera_irq, 0, RK29_CAM_DRV_NAME,
+	if (irq > 0) {
+		err = request_irq(pcdev->irqinfo.irq, rk_camera_irq, IRQF_DISABLED | IRQF_SHARED , RK29_CAM_DRV_NAME,
                           pcdev);
-        if (err) {
-            dev_err(pcdev->dev, "Camera interrupt register failed \n");
-            goto exit_reqirq;
-        }
-   	}
+		if (err) {
+			dev_err(pcdev->dev, "Camera interrupt register failed \n");
+			goto exit_reqirq;
+		}
+	}
    
     if(IS_CIF0()) {
     	pcdev->camera_wq = create_workqueue("rk_cam_wkque_cif0");
@@ -3330,6 +3438,7 @@ exit_reqirq:
 exit_ioremap_vip:
     release_mem_region(res->start, res->end - res->start + 1);
 exit_reqmem_vip:
+#if 0
     if (clk) {
 		if(CHIP_NAME != 3368){
 	        if (clk->pd_cif)
@@ -3345,13 +3454,14 @@ exit_reqmem_vip:
             clk_put(clk->cif_clk_out);
     }
     kfree(pcdev);
+#endif
 exit_alloc:
 
 exit:
     return err;
 }
 
-static int __exit rk_camera_remove(struct platform_device *pdev)
+static int /* __exit */ rk_camera_remove(struct platform_device *pdev)
 {
     struct rk_camera_dev *pcdev = platform_get_drvdata(pdev);
     struct resource *res;
@@ -3422,7 +3532,7 @@ static int __init rk_camera_init(void)
     return 0;
 }
 
-static void __exit rk_camera_exit(void)
+static void /* __exit */ rk_camera_exit(void)
 {
 	debug_printk( "/$$$$$$$$$$$$$$$$$$$$$$//n Here I am: %s:%i-------%s()/n", __FILE__, __LINE__,__FUNCTION__);
 

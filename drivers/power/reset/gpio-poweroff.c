@@ -19,6 +19,8 @@
 #include <linux/of_platform.h>
 #include <linux/of_gpio.h>
 #include <linux/module.h>
+#include <linux/reboot.h>
+#include <linux/rockchip/cpu.h>
 
 /*
  * Hold configuration here, cannot be more than one instance of the driver
@@ -26,11 +28,20 @@
  */
 static int gpio_num = -1;
 static int gpio_active_low;
+static bool auto_power_off;
+module_param(auto_power_off, bool, 0644);
+
+extern int dwc_vbus_status(void);
 
 static void gpio_poweroff_do_poweroff(void)
 {
 	BUG_ON(!gpio_is_valid(gpio_num));
 
+	if (auto_power_off) {
+		pr_info("%s: vbus status: %d\n", __func__, dwc_vbus_status());
+		if (dwc_vbus_status())
+			machine_restart(NULL);
+	}
 	/* drive it active, also inactive->active edge */
 	gpio_direction_output(gpio_num, !gpio_active_low);
 	mdelay(100);

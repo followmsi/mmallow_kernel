@@ -385,6 +385,7 @@ void dwc_otg_force_device(dwc_otg_core_if_t *core_if)
 	local_irq_save(flags);
 
 	if (core_if->op_state == B_PERIPHERAL) {
+		local_irq_restore(flags);
 		printk
 		    ("dwc_otg_force_device,already in B_PERIPHERAL,everest\n");
 		return;
@@ -1312,8 +1313,8 @@ static const struct of_device_id usb20_otg_of_match[] = {
 	 .data = &usb20otg_pdata_rk322x,
 	 },
 	 {
-	 .compatible = "rockchip,rk1108_usb20_otg",
-	 .data = &usb20otg_pdata_rk1108,
+	 .compatible = "rockchip,rv1108_usb20_otg",
+	 .data = &usb20otg_pdata_rv1108,
 	 },
 #endif
 #ifdef CONFIG_ARM64
@@ -1321,6 +1322,10 @@ static const struct of_device_id usb20_otg_of_match[] = {
 	 .compatible = "rockchip,rk3368_usb20_otg",
 	 .data = &usb20otg_pdata_rk3368,
 	 },
+	{
+	 .compatible = "rockchip,rk322xh_usb20_otg",
+	 .data = &usb20otg_pdata_rk322xh,
+	},
 #endif
 	{ },
 };
@@ -1509,6 +1514,12 @@ static int otg20_driver_probe(struct platform_device *_dev)
 	of_property_read_u32(node, "rockchip,usb-mode", &val);
 	dwc_otg_device->core_if->usb_mode = val;
 
+	/* usb early detect */
+	if (of_property_read_u32(node, "rockchip,usb-early-detect", &val))
+		dwc_otg_device->core_if->usb_early_detect = 8;
+	else
+		dwc_otg_device->core_if->usb_early_detect = val;
+
 #ifndef DWC_HOST_ONLY
 	/*
 	 * Initialize the PCD
@@ -1627,7 +1638,9 @@ void rk_usb_power_up(void)
 {
 	struct dwc_otg_platform_data *pldata_otg;
 	struct dwc_otg_platform_data *pldata_host;
+#ifdef CONFIG_USB_EHCI_RK
 	struct rkehci_platform_data *pldata_ehci;
+#endif
 
 	if (cpu_is_rk3288()) {
 #ifdef CONFIG_RK_USB_UART
@@ -1681,7 +1694,9 @@ void rk_usb_power_down(void)
 {
 	struct dwc_otg_platform_data *pldata_otg;
 	struct dwc_otg_platform_data *pldata_host;
+#ifdef CONFIG_USB_EHCI_RK
 	struct rkehci_platform_data *pldata_ehci;
+#endif
 
 	if (cpu_is_rk3288()) {
 #ifdef CONFIG_RK_USB_UART

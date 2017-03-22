@@ -2,7 +2,11 @@
 #include <linux/string.h>
 #include <linux/display-sys.h>
 #include <linux/interrupt.h>
+#include <linux/moduleparam.h>
 #include "rockchip-hdmi.h"
+
+int hdmi_dbg_level;
+module_param(hdmi_dbg_level, int, S_IRUGO | S_IWUSR);
 
 static int hdmi_get_enable(struct rk_display_device *device)
 {
@@ -28,7 +32,7 @@ static int hdmi_get_status(struct rk_display_device *device)
 {
 	struct hdmi *hdmi = device->priv_data;
 
-	if (hdmi->hotplug == HDMI_HPD_ACTIVED)
+	if (hdmi->hotplug == HDMI_HPD_ACTIVATED)
 		return 1;
 	else
 		return 0;
@@ -51,7 +55,7 @@ static int hdmi_set_mode(struct rk_display_device *device,
 			container_of(mode, struct display_modelist, mode);
 	int vic = 0;
 
-	if (mode == NULL) {
+	if (!mode) {
 		hdmi->autoset = 1;
 		vic = hdmi_find_best_mode(hdmi, 0);
 	} else {
@@ -61,7 +65,7 @@ static int hdmi_set_mode(struct rk_display_device *device,
 
 	if (vic && hdmi->vic != vic) {
 		hdmi->vic = vic;
-		if (hdmi->hotplug == HDMI_HPD_ACTIVED)
+		if (hdmi->hotplug == HDMI_HPD_ACTIVATED)
 			hdmi_submit_work(hdmi, HDMI_SET_VIDEO, 0, 0);
 	}
 	return 0;
@@ -73,13 +77,13 @@ static int hdmi_get_mode(struct rk_display_device *device,
 	struct hdmi *hdmi = device->priv_data;
 	struct fb_videomode *vmode;
 
-	if (mode == NULL)
+	if (!mode)
 		return -1;
 
 	if (hdmi->vic) {
 		vmode = (struct fb_videomode *)
 			hdmi_vic_to_videomode(hdmi->vic);
-		if (unlikely(vmode == NULL))
+		if (unlikely(!vmode))
 			return -1;
 		*mode = *vmode;
 		if (hdmi->vic & HDMI_VIDEO_YUV420)
@@ -117,7 +121,7 @@ static int hdmi_set_3dmode(struct rk_display_device *device, int mode)
 
 	if (hdmi->mode_3d != mode) {
 		hdmi->mode_3d = mode;
-		if (hdmi->hotplug == HDMI_HPD_ACTIVED)
+		if (hdmi->hotplug == HDMI_HPD_ACTIVATED)
 			hdmi_submit_work(hdmi, HDMI_SET_3D, 0, 0);
 	}
 	return 0;
@@ -167,7 +171,7 @@ static int hdmi_get_edidaudioinfo(struct rk_display_device *device,
 	memset(audioinfo, 0x00, len);
 	/*printk("hdmi:edid: audio_num: %d\n", hdmi->edid.audio_num);*/
 	for (i = 0; i < hdmi->edid.audio_num; i++) {
-		audio = &(hdmi->edid.audio[i]);
+		audio = &hdmi->edid.audio[i];
 		if (audio->type < 1 || audio->type > HDMI_AUDIO_WMA_PRO) {
 			pr_info("audio type: unsupported.");
 			continue;
@@ -175,7 +179,7 @@ static int hdmi_get_edidaudioinfo(struct rk_display_device *device,
 		size = strlen(audioformatstr[audio->type]);
 		memcpy(audioinfo, audioformatstr[audio->type], size);
 		audioinfo[size] = ',';
-		audioinfo += (size+1);
+		audioinfo += (size + 1);
 	}
 	return 0;
 }
@@ -217,6 +221,18 @@ static int hdmi_get_color(struct rk_display_device *device, char *buf)
 		      "Supported Colorimetry: %d\n", hdmi->edid.colorimetry);
 	i += snprintf(buf + i, PAGE_SIZE - i,
 		      "Current Colorimetry: %d\n", hdmi->colorimetry);
+	i += snprintf(buf + i, PAGE_SIZE - i,
+		      "Supported EOTF: 0x%x\n", hdmi->edid.hdr.hdrinfo.eotf);
+	i += snprintf(buf + i, PAGE_SIZE - i,
+		      "Current EOTF: 0x%x\n", hdmi->eotf);
+	i += snprintf(buf + i, PAGE_SIZE - i,
+		      "HDR MeteData: %d %d %d %d %d %d %d %d %d %d %d %d\n",
+		      hdmi->hdr.prim_x0, hdmi->hdr.prim_y0,
+		      hdmi->hdr.prim_x1, hdmi->hdr.prim_y1,
+		      hdmi->hdr.prim_x2, hdmi->hdr.prim_y2,
+		      hdmi->hdr.white_px, hdmi->hdr.white_py,
+		      hdmi->hdr.max_dml, hdmi->hdr.min_dml,
+		      hdmi->hdr.max_cll, hdmi->hdr.max_fall);
 	return i;
 }
 
@@ -229,10 +245,15 @@ static int hdmi_set_color(struct rk_display_device *device,
 	if (!strncmp(buf, "mode", 4)) {
 		if (sscanf(buf, "mode=%d", &value) == -1)
 			return -1;
-		pr_debug("current mode is %d input mode is %d\n",
+		pr_debug("current mode is %d input mode is %x\n",
 			 hdmi->colormode, value);
-		if (hdmi->colormode != value)
-			hdmi->colormode = value;
+		if (hdmi->colormode != (value & 0xff))
+			hdmi->colormode = value & 0xff;
+		if (hdmi->colordepth != ((value >> 8) & 0xff)) {
+			pr_debug("current depth is %d input mode is %d\n",
+				 hdmi->colordepth, ((value >> 8) & 0xff));
+			hdmi->colordepth = ((value >> 8) & 0xff);
+		}
 	} else if (!strncmp(buf, "depth", 5)) {
 		if (sscanf(buf, "depth=%d", &value) == -1)
 			return -1;
@@ -240,6 +261,8 @@ static int hdmi_set_color(struct rk_display_device *device,
 			 hdmi->colordepth, value);
 		if (hdmi->colordepth != value)
 			hdmi->colordepth = value;
+		else
+			return 0;
 	} else if (!strncmp(buf, "colorimetry", 11)) {
 		if (sscanf(buf, "colorimetry=%d", &value) == -1)
 			return -1;
@@ -247,11 +270,39 @@ static int hdmi_set_color(struct rk_display_device *device,
 			 hdmi->colorimetry, value);
 		if (hdmi->colorimetry != value)
 			hdmi->colorimetry = value;
+		else
+			return 0;
+	} else if (!strncmp(buf, "hdr", 3)) {
+		if (sscanf(buf, "hdr=%d", &value) == -1)
+			return -1;
+		pr_info("current hdr eotf is %d input hdr eotf is %d\n",
+			hdmi->eotf, value);
+		if (hdmi->eotf != value &&
+		    (value & hdmi->edid.hdr.hdrinfo.eotf ||
+		     value == 0)) {
+			hdmi->eotf = value;
+			if (hdmi->hotplug == HDMI_HPD_ACTIVATED)
+				hdmi_submit_work(hdmi, HDMI_SET_HDR, 0, 0);
+		}
+		return 0;
+	} else if (!strncmp(buf, "hdrmdata", 8)) {
+		value = sscanf(buf,
+			       "hdrmdata=%u %u %u %u %u %u %u %u %u %u %u %u",
+			       &hdmi->hdr.prim_x0, &hdmi->hdr.prim_y0,
+			       &hdmi->hdr.prim_x1, &hdmi->hdr.prim_y1,
+			       &hdmi->hdr.prim_x2, &hdmi->hdr.prim_y2,
+			       &hdmi->hdr.white_px, &hdmi->hdr.white_py,
+			       &hdmi->hdr.max_dml, &hdmi->hdr.min_dml,
+			       &hdmi->hdr.max_cll, &hdmi->hdr.max_fall);
+		if (value == -1)
+			return -1;
+		else
+			return 0;
 	} else {
-		pr_err("%s unkown event\n", __func__);
+		pr_err("%s unknown event\n", __func__);
 		return -1;
 	}
-	if (hdmi->hotplug == HDMI_HPD_ACTIVED)
+	if (hdmi->hotplug == HDMI_HPD_ACTIVATED)
 		hdmi_submit_work(hdmi, HDMI_SET_COLOR, 0, 0);
 	return 0;
 }
@@ -301,12 +352,12 @@ static int hdmi_get_monspecs(struct rk_display_device *device,
 		return -1;
 
 	if (hdmi->edid.specs)
-		*monspecs = *(hdmi->edid.specs);
+		*monspecs = *hdmi->edid.specs;
 	return 0;
 }
 
 /**
- * hdmi_show_sink_info: show hdmi sink device infomation
+ * hdmi_show_sink_info: show hdmi sink device information
  * @hdmi: handle of hdmi
  */
 static int hdmi_show_sink_info(struct hdmi *hdmi, char *buf, int len)
@@ -408,7 +459,7 @@ static int hdmi_show_sink_info(struct hdmi *hdmi, char *buf, int len)
 	lens += snprintf(buf + lens, PAGE_SIZE - lens,
 			 "\nSupport audio type:");
 	for (i = 0; i < hdmi->edid.audio_num; i++) {
-		audio = &(hdmi->edid.audio[i]);
+		audio = &hdmi->edid.audio[i];
 		switch (audio->type) {
 		case HDMI_AUDIO_LPCM:
 			lens += snprintf(buf + lens, PAGE_SIZE - lens,
@@ -468,7 +519,7 @@ static int hdmi_show_sink_info(struct hdmi *hdmi, char *buf, int len)
 			break;
 		default:
 			lens += snprintf(buf + lens, PAGE_SIZE - lens,
-					 " Unkown");
+					 " Unknown");
 			break;
 		}
 		lens += snprintf(buf + lens, PAGE_SIZE - lens,
@@ -498,7 +549,7 @@ static int hdmi_show_sink_info(struct hdmi *hdmi, char *buf, int len)
 			lens += snprintf(buf + lens, PAGE_SIZE - lens,
 					 " 192000");
 		lens += snprintf(buf + lens, PAGE_SIZE - lens,
-				 "\nSupport audio word lenght:");
+				 "\nSupport audio word length:");
 		if (audio->rate & HDMI_AUDIO_WORD_LENGTH_16bit)
 			lens += snprintf(buf + lens, PAGE_SIZE - lens,
 					 " 16bit");
@@ -516,14 +567,14 @@ static int hdmi_show_sink_info(struct hdmi *hdmi, char *buf, int len)
 static int hdmi_get_debug(struct rk_display_device *device, char *buf)
 {
 	struct hdmi *hdmi = device->priv_data;
-	char *buff;
+	u8 *buff;
 	int i, j, len = 0;
 
 	if (!hdmi)
 		return 0;
-	len += snprintf(buf+len, PAGE_SIZE - len, "EDID status:%s\n",
+	len += snprintf(buf + len, PAGE_SIZE - len, "EDID status:%s\n",
 			hdmi->edid.status ? "False" : "Okay");
-	len += snprintf(buf+len, PAGE_SIZE - len, "Raw Data:");
+	len += snprintf(buf + len, PAGE_SIZE - len, "Raw Data:");
 	for (i = 0; i < HDMI_MAX_EDID_BLOCK; i++) {
 		if (!hdmi->edid.raw[i])
 			break;
@@ -532,11 +583,11 @@ static int hdmi_get_debug(struct rk_display_device *device, char *buf)
 			if (j % 16 == 0)
 				len += snprintf(buf + len,
 						PAGE_SIZE - len, "\n");
-			len += snprintf(buf+len, PAGE_SIZE - len, "0x%02x, ",
+			len += snprintf(buf + len, PAGE_SIZE - len, "0x%02x, ",
 					buff[j]);
 		}
 	}
-	len += snprintf(buf+len, PAGE_SIZE, "\n");
+	len += snprintf(buf + len, PAGE_SIZE, "\n");
 	if (!hdmi->edid.status)
 		len += hdmi_show_sink_info(hdmi, buf, len);
 	return len;

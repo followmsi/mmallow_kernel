@@ -1696,10 +1696,10 @@ static int32_t handle_hc_ahberr_intr(dwc_otg_hcd_t *hcd,
 	DWC_ERROR("  Max packet size: %d\n",
 		  dwc_otg_hcd_get_mps(&urb->pipe_info));
 	DWC_ERROR("  Data buffer length: %d\n", urb->length);
-	DWC_ERROR("  Transfer buffer: %p, Transfer DMA: %p\n",
-		  urb->buf, (void *)urb->dma);
-	DWC_ERROR("  Setup buffer: %p, Setup DMA: %p\n",
-		  urb->setup_packet, (void *)urb->setup_dma);
+	DWC_ERROR("  Transfer buffer: %p, Transfer DMA: %pad\n",
+		  urb->buf, &urb->dma);
+	DWC_ERROR("  Setup buffer: %p, Setup DMA: %pad\n",
+		  urb->setup_packet, &urb->setup_dma);
 	DWC_ERROR("  Interval: %d\n", urb->interval);
 
 	/* Core haltes the channel for Descriptor DMA mode */
@@ -1924,7 +1924,6 @@ static void handle_hc_chhltd_intr_dma(dwc_otg_hcd_t *hcd,
 	hcint_data_t hcint;
 	hcintmsk_data_t hcintmsk;
 	int out_nak_enh = 0;
-	struct dwc_otg_platform_data *pldata = hcd->core_if->otg_dev->pldata;
 
 	/* For core with OUT NAK enhancement, the flow for high-
 	 * speed CONTROL/BULK OUT is handled a little differently.
@@ -2052,8 +2051,9 @@ static void handle_hc_chhltd_intr_dma(dwc_otg_hcd_t *hcd,
 	} else {
 		DWC_PRINTF("NYET/NAK/ACK/other in non-error case, 0x%08x\n",
 			   hcint.d32);
-		pldata->soft_reset(pldata, RST_CHN_HALT);
-		mdelay(5);
+
+		schedule_work(&hcd->phy_rst_work);
+
 		if (!hcint.b.nyet && !hcint.b.nak && !hcint.b.ack)
 			clear_hc_int(hc_regs, chhltd);
 	}

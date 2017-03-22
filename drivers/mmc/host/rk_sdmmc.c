@@ -57,6 +57,7 @@
 #include "rk_sdmmc_dbg.h"
 #include <linux/regulator/rockchip_io_vol_domain.h>
 #include "../../clk/rockchip/clk-ops.h"
+#include <linux/rk_keys.h>
 
 #define RK_SDMMC_DRIVER_VERSION "Ver 2.00 2015-06-10"
 
@@ -115,7 +116,6 @@ static inline bool dw_mci_fifo_reset(struct dw_mci *host);
 static inline bool dw_mci_ctrl_all_reset(struct dw_mci *host);
 static bool dw_mci_ctrl_reset(struct dw_mci *host, u32 reset);
 static void dw_mci_disable_low_power(struct dw_mci_slot *slot);
-extern void rk_send_wakeup_key(void);
 static void rockchip_mmc_reset_controller(struct reset_control *reset);
 
 #if defined(CONFIG_DEBUG_FS)
@@ -255,9 +255,13 @@ static u32 dw_mci_prepare_command(struct mmc_host *mmc, struct mmc_command *cmd)
 
 	cmdr = cmd->opcode;
 
-	if (cmdr == MMC_STOP_TRANSMISSION)
+	if (cmd->opcode == MMC_STOP_TRANSMISSION ||
+	    cmd->opcode == MMC_GO_IDLE_STATE ||
+	    cmd->opcode == MMC_GO_INACTIVE_STATE ||
+	    (cmd->opcode == SD_IO_RW_DIRECT &&
+	    ((cmd->arg >> 9) & 0x1FFFF) == SDIO_CCCR_ABORT))
 		cmdr |= SDMMC_CMD_STOP;
-	else
+	else if (cmd->opcode != MMC_SEND_STATUS && cmd->data)
 		cmdr |= SDMMC_CMD_PRV_DAT_WAIT;
 
 	if (cmd->flags & MMC_RSP_PRESENT) {
@@ -535,7 +539,7 @@ static void dw_mci_edmac_start_dma(struct dw_mci *host, unsigned int sg_len)
 	int ret = 0;
 
 	/* Set external dma config: burst size, burst width*/
-	slave_config.dst_addr = (dma_addr_t)(host->phy_regs + host->data_offset);
+	slave_config.dst_addr = host->phy_regs + host->data_offset;
 	slave_config.src_addr = slave_config.dst_addr;
 	slave_config.dst_addr_width = DMA_SLAVE_BUSWIDTH_4_BYTES;
 	slave_config.src_addr_width = slave_config.dst_addr_width;
@@ -1130,11 +1134,10 @@ static void dw_mci_setup_bus(struct dw_mci_slot *slot, bool force_clkinit)
 }
 
 extern struct mmc_card *this_card;
-static void dw_mci_wait_unbusy(struct dw_mci *host)
+static void dw_mci_wait_unbusy(struct dw_mci *host, u32 cmd_flags)
 {
         unsigned int timeout = SDMMC_DATA_TIMEOUT_SDIO;
         unsigned long time_loop;
-        unsigned int status;
         unsigned int tmo = 300000;
 	/* Secure erase flag */
 	u32 se_flag = 0;
@@ -1161,12 +1164,19 @@ static void dw_mci_wait_unbusy(struct dw_mci *host)
                 timeout = SDMMC_DATA_TIMEOUT_SD;
         }
 
-        time_loop = jiffies + msecs_to_jiffies(timeout);
-        do {
-                status = mci_readl(host, STATUS);
-                if (!(status & (SDMMC_STAUTS_DATA_BUSY | SDMMC_STAUTS_MC_BUSY)))
-                        break;
-        } while (time_before(jiffies, time_loop));
+	time_loop = jiffies + msecs_to_jiffies(timeout);
+
+	if ((cmd_flags & SDMMC_CMD_PRV_DAT_WAIT) &&
+	    !(cmd_flags & SDMMC_CMD_VOLT_SWITCH)) {
+		while (mci_readl(host, STATUS) &
+		      (SDMMC_STAUTS_DATA_BUSY | SDMMC_STAUTS_MC_BUSY)) {
+			if (time_after(jiffies, time_loop)) {
+				/* Command will fail; we'll pass error then */
+				dev_err(host->dev, "Busy; trying anyway\n");
+				break;
+			}
+		}
+	}
 }
 
 #ifdef CONFIG_MMC_DW_ROCKCHIP_SWITCH_VOLTAGE
@@ -1211,8 +1221,6 @@ static void __dw_mci_start_request(struct dw_mci *host,
 
 	host->cur_slot = slot;
 	host->mrq = mrq;
-
-        dw_mci_wait_unbusy(host);
     
 	host->pending_events = 0;
 	host->completed_events = 0;
@@ -1236,6 +1244,8 @@ static void __dw_mci_start_request(struct dw_mci *host,
 		dw_mci_submit_data(host, data);
 		wmb();
 	}
+
+	dw_mci_wait_unbusy(host, cmdflags);
 
 	dw_mci_start_command(host, cmd, cmdflags);
 
@@ -1377,6 +1387,17 @@ static void dw_mci_set_ios(struct mmc_host *mmc, struct mmc_ios *ios)
 		regs &= ~((0x1 << slot->id) << 16);
 	}
 
+	/* SDR/HS200 mode set */
+	if (ios->timing == MMC_TIMING_MMC_HS200) {
+		if (priv->ctrl_type == DW_MCI_TYPE_RK322XH)
+			cru_writel(((0x3 << 1) << 16) | (0x1 << 1),
+				   RK322XH_CRU_EMMC_CON0);
+	} else if (ios->timing == MMC_TIMING_UHS_SDR104) {
+		if (priv->ctrl_type == DW_MCI_TYPE_RK322XH)
+			cru_writel(((0x3 << 1) << 16) | (0x1 << 1),
+				   RK322XH_CRU_SDIO_CON0);
+	}
+
 	mci_writel(slot->host, UHS_REG, regs);
 	slot->host->timing = ios->timing;
 
@@ -1407,9 +1428,22 @@ EXIT_POWER:
 			regs |= (1 << slot->id);
 
 		mci_writel(slot->host, PWREN, regs);
+
+		if ((mmc->restrict_caps & RESTRICT_CARD_TYPE_SD) &&
+		    !IS_ERR(host->pins_default) && cpu_is_rv1108()) {
+			if (pinctrl_select_state(host->pinctrl,
+						 host->pins_default) < 0)
+				dev_err(host->dev, "pins_default pinctrl setting failed\n");
+		}
 		break;
 	case MMC_POWER_OFF:
 	/* Power down slot */
+		if ((mmc->restrict_caps & RESTRICT_CARD_TYPE_SD) &&
+		    !IS_ERR(host->pins_idle) && cpu_is_rv1108()) {
+			if (pinctrl_select_state(host->pinctrl,
+						 host->pins_idle) < 0)
+				dev_err(host->dev, "pins_idle pinctrl setting failed\n");
+		}
 		if(slot->host->pdata->setpower)
 			slot->host->pdata->setpower(slot->id, 0);
 		regs = mci_readl(slot->host, PWREN);
@@ -1420,6 +1454,7 @@ EXIT_POWER:
 			regs &= ~(1 << slot->id);
 
 		mci_writel(slot->host, PWREN, regs);
+		dw_mci_ctrl_all_reset(host);
 		break;
 	default:
 		break;
@@ -2024,6 +2059,26 @@ retry_stop:
 		 mmc_hostname(host->mmc));
 }
 
+void dw_mci_sdio_switch_iovel(struct mmc_host *mmc, int enable)
+{
+	struct dw_mci_slot *slot = mmc_priv(mmc);
+	struct dw_mci *host = slot->host;
+	const struct dw_mci_rockchip_priv_data *priv = host->priv;
+
+	switch (priv->ctrl_type) {
+	case DW_MCI_TYPE_RK322XH:
+		regmap_write(host->grf, RK322XH_GRF_SOC_CON4,
+			     (enable << 3) | ((1 << 3) << 16));
+		if (enable)
+			host->bus_hz = 150000000;
+		else
+			host->bus_hz = 50000000;
+		break;
+	default:
+		pr_info("%s not switch iovel.\n", mmc_hostname(host->mmc));
+	}
+}
+
 static const struct mmc_host_ops dw_mci_ops = {
 	.request		= dw_mci_request,
 	.pre_req		= dw_mci_pre_req,
@@ -2041,17 +2096,9 @@ static const struct mmc_host_ops dw_mci_ops = {
 				= dw_mci_start_signal_voltage_switch,
         .card_busy		= dw_mci_card_busy,
         #endif
+	.sdio_switch_iovel	= dw_mci_sdio_switch_iovel,
 };
-/*
-static void dw_mci_deal_data_end(struct dw_mci *host, struct mmc_request *mrq)
-	__releases(&host->lock)
-	__acquires(&host->lock)
-{
-	if (DW_MCI_SEND_STATUS == host->dir_status){
-		dw_mci_wait_unbusy(host);
-	}
-}
-*/
+
 static void dw_mci_request_end(struct dw_mci *host, struct mmc_request *mrq)
 	__releases(&host->lock)
 	__acquires(&host->lock)
@@ -2060,8 +2107,6 @@ static void dw_mci_request_end(struct dw_mci *host, struct mmc_request *mrq)
 	struct mmc_host	*prev_mmc = host->cur_slot->mmc;
 
 	//WARN_ON(host->cmd || host->data);
-
-	//dw_mci_deal_data_end(host, mrq);
 
 	if(mrq->cmd)
 		MMC_DBG_CMD_FUNC(host->mmc,
@@ -2150,14 +2195,6 @@ static void dw_mci_command_complete(struct dw_mci *host, struct mmc_command *cmd
 	if (cmd->error) {
 		MMC_DBG_WARN_FUNC(host->mmc, "cmd%d Error: %d, status: 0x%08x. [%s]",
 			cmd->opcode, cmd->error, status, mmc_hostname(host->mmc));
-
-		if(MMC_SEND_STATUS != cmd->opcode)
-			if(host->cmd_rto >= SDMMC_CMD_RTO_MAX_HOLD){
-				host->cmd_rto = 0;
-				MMC_DBG_ERR_FUNC(host->mmc,
-					"Cmd response timeout hold times overflow. [%s]",
-					mmc_hostname(host->mmc));
-			}
 
 		/* newer ip versions need a delay between retries */
 		if (host->quirks & DW_MCI_QUIRK_RETRY_DELAY)
@@ -2284,7 +2321,6 @@ static void dw_mci_tasklet_func(unsigned long priv)
 						&host->pending_events))
 				break;
 
-			//dw_mci_deal_data_end(host, host->mrq);			
                         MMC_DBG_INFO_FUNC(host->mmc, 
 				"Pre-state[%d]-->NowState[%d]: STATE_DATA_BUSY, "
 				"after EVENT_DATA_COMPLETE. [%s]",
@@ -3052,7 +3088,6 @@ static void dw_mci_work_routine_card(struct work_struct *work)
 					}
 				}
 
-				dw_mci_ctrl_all_reset(host);
 				/* Stop edma when rountine card triggered */
 				if (cpu_is_rk3036() || cpu_is_rk312x())
 					if (host->dma_ops && host->dma_ops->stop)
@@ -3461,6 +3496,12 @@ static int dw_mci_init_slot(struct dw_mci *host, unsigned int id)
 			grf_writel(((1 << 12) << 16) | (0 << 12), RK3288_GRF_SOC_CON0);
 		} else if (priv->ctrl_type == DW_MCI_TYPE_RK322X) {
 			grf_writel(((1 << 8) << 16) | (0 << 8), RK322X_GRF_SOC_CON6);
+		} else if (priv->ctrl_type == DW_MCI_TYPE_RK322XH) {
+			if (!IS_ERR(host->grf))
+				regmap_write(host->grf, RK322XH_GRF_SOC_CON4,
+					     (1 << 12) << 16 | (0 << 12));
+			else
+				pr_err("rk_sdmmc couldn't find grf for RK322XH\n");
 		}
 	} else {
 		if (priv->ctrl_type == DW_MCI_TYPE_RK3368)
@@ -4041,6 +4082,8 @@ int dw_mci_probe(struct dw_mci *host)
 
 	init_dma_attrs(&dw_mci_direct_attrs);
 	dma_set_attr(DMA_ATTR_SKIP_CPU_SYNC, &dw_mci_direct_attrs);
+
+	dma_coerce_mask_and_coherent(host->dev, DMA_BIT_MASK(32));
 
 	host->dma_ops = host->pdata->dma_ops;
 	dw_mci_init_dma(host);

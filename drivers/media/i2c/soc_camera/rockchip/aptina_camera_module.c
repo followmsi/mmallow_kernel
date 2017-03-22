@@ -138,7 +138,7 @@ int aptina_write_i2c_reg(
 		data[0] = (u8) ((reg>>8) & 0xff);
 		data[1] = (u8) (reg & 0xff);
 		data[2] = (u8) ((val>>8) & 0xff);
-		data[3] = (u8) (val& 0xff);
+		data[3] = (u8) (val & 0xff);
 
 		ret = i2c_transfer(client->adapter, msg, 1);
 		udelay(50);
@@ -190,9 +190,9 @@ int aptina_write_reglist(
 			(msg + j)->len = 4;
 			(msg + j)->buf = (data + k);
 
-			data[k + 0] = (u8) ( (reglist[i].reg >> 8) & 0xFF);
+			data[k + 0] = (u8) ((reglist[i].reg >> 8) & 0xFF);
 			data[k + 1] = (u8) (reglist[i].reg & 0xFF);
-			data[k + 2] = (u8) ( (reglist[i].val >> 8) & 0xFF);
+			data[k + 2] = (u8) ((reglist[i].val >> 8) & 0xFF);
 			data[k + 3] = (u8) (reglist[i].val & 0xFF);
 
 			k = k + 4;
@@ -420,11 +420,11 @@ static int aptina_camera_module_attach(
 
 	custom = &cam_mod->custom;
 	pltfrm_camera_module_pr_debug(&cam_mod->sd, "\n");
-	if(custom->check_camera_id) {
+	if (custom->check_camera_id) {
 		aptina_camera_module_s_power(&cam_mod->sd, 1);
 		ret = (custom->check_camera_id)(cam_mod);
 		aptina_camera_module_s_power(&cam_mod->sd, 0);
-		if(ret != 0)
+		if (ret != 0)
 			goto err;
 	}
 
@@ -433,6 +433,7 @@ static int aptina_camera_module_attach(
 err:
 	pltfrm_camera_module_pr_err(&cam_mod->sd,
 				"failed with error %d\n", ret);
+	aptina_camera_module_release(cam_mod);
 	return ret;
 }
 
@@ -480,6 +481,13 @@ int aptina_camera_module_s_fmt(struct v4l2_subdev *sd,
 		aptina_camera_module_set_active_config(cam_mod,
 			aptina_camera_module_find_config(cam_mod,
 				fmt, &cam_mod->frm_intrvl));
+	} else {
+		aptina_camera_module_set_active_config(
+			cam_mod,
+			aptina_camera_module_find_config(
+				cam_mod,
+				fmt,
+				NULL));
 	}
 	return 0;
 err:
@@ -518,7 +526,10 @@ int aptina_camera_module_s_frame_interval(
 	struct aptina_camera_module *cam_mod = to_aptina_camera_module(sd);
 	unsigned long gcdiv;
 	struct v4l2_subdev_frame_interval norm_interval;
+	struct aptina_camera_module_config *config;
+	unsigned int vts;
 	int ret = 0;
+
 	pltfrm_camera_module_pr_debug(&cam_mod->sd, "\n");
 	if ((0 == interval->interval.denominator) ||
 		(0 == interval->interval.numerator)) {
@@ -544,27 +555,90 @@ int aptina_camera_module_s_frame_interval(
 	norm_interval.interval.denominator =
 		interval->interval.denominator / gcdiv;
 
-	if (IS_ERR_OR_NULL(aptina_camera_module_find_config(cam_mod,
-			NULL, &norm_interval))) {
-		pltfrm_camera_module_pr_err(&cam_mod->sd,
-			"frame interval %d/%d not supported\n",
-			interval->interval.numerator,
-			interval->interval.denominator);
-		ret = -EINVAL;
-		goto err;
+	if (!cam_mod->frm_fmt_valid)
+		goto end;
+
+	config = aptina_camera_module_find_config(
+			cam_mod,
+			&cam_mod->active_config->frm_fmt,
+			&norm_interval);
+
+	if (!IS_ERR_OR_NULL(config) && (config != cam_mod->active_config)) {
+		aptina_camera_module_set_active_config(cam_mod, config);
+		if (cam_mod->state == APTINA_CAMERA_MODULE_STREAMING) {
+			cam_mod->custom.stop_streaming(cam_mod);
+			aptina_camera_module_write_config(cam_mod);
+			cam_mod->custom.start_streaming(cam_mod);
+		}
+	} else {
+		if (IS_ERR_OR_NULL(cam_mod->active_config)) {
+			pltfrm_camera_module_pr_err(
+				&cam_mod->sd,
+				"no active sensor configuration");
+			ret = -EFAULT;
+			goto err;
+		}
+
+		if (cam_mod->active_config->frm_intrvl.interval.denominator <
+			norm_interval.interval.denominator) {
+			pltfrm_camera_module_pr_err(
+				&cam_mod->sd,
+				"%dx%d@%dfps isn't support!",
+				cam_mod->active_config->frm_fmt.width,
+				cam_mod->active_config->frm_fmt.height,
+				norm_interval.interval.denominator);
+			ret = -EFAULT;
+			goto err;
+		}
+
+		if (!cam_mod->custom.s_vts) {
+			pltfrm_camera_module_pr_err(
+				&cam_mod->sd,
+				"custom.s_vts isn't support!");
+			ret = -EFAULT;
+			goto err;
+		}
+
+		if (cam_mod->state != APTINA_CAMERA_MODULE_STREAMING)
+			goto end;
+
+		vts = cam_mod->active_config->timings.frame_length_lines;
+		vts *= cam_mod->active_config->frm_intrvl.interval.denominator;
+		vts /= norm_interval.interval.denominator;
+		cam_mod->custom.s_vts(cam_mod, vts);
 	}
+
+end:
 	cam_mod->frm_intrvl_valid = true;
 	cam_mod->frm_intrvl = norm_interval;
-	if (cam_mod->frm_fmt_valid) {
-		aptina_camera_module_set_active_config(cam_mod,
-			aptina_camera_module_find_config(cam_mod,
-				&cam_mod->frm_fmt, interval));
-	}
+	cam_mod->auto_adjust_fps = false;
+
 	return 0;
 err:
 	pltfrm_camera_module_pr_err(&cam_mod->sd,
 		"failed with error %d\n", ret);
 	return ret;
+}
+
+int aptina_camera_module_g_frame_interval(
+	struct v4l2_subdev *sd,
+	struct v4l2_subdev_frame_interval *interval)
+{
+	struct aptina_camera_module *cam_mod = to_aptina_camera_module(sd);
+
+	if (cam_mod->active_config) {
+		if (cam_mod->state == OV_CAMERA_MODULE_STREAMING) {
+			if (cam_mod->frm_intrvl_valid) {
+				*interval = cam_mod->frm_intrvl;
+				return 0;
+			} else {
+				*interval = cam_mod->active_config->frm_intrvl;
+				return 0;
+			}
+		}
+	}
+
+	return -EFAULT;
 }
 
 /* ======================================================================== */
@@ -573,6 +647,7 @@ int aptina_camera_module_s_stream(struct v4l2_subdev *sd, int enable)
 {
 	int ret = 0;
 	struct aptina_camera_module *cam_mod =  to_aptina_camera_module(sd);
+	unsigned int vts;
 
 	pltfrm_camera_module_pr_debug(&cam_mod->sd, "%d\n", enable);
 
@@ -604,12 +679,37 @@ int aptina_camera_module_s_stream(struct v4l2_subdev *sd, int enable)
 		ret = cam_mod->custom.start_streaming(cam_mod);
 		if (IS_ERR_VALUE(ret))
 			goto err;
+
+		if (cam_mod->frm_intrvl_valid) {
+			if ((cam_mod->frm_intrvl.interval.numerator !=
+				cam_mod->active_config->frm_intrvl.interval.numerator) ||
+				(cam_mod->frm_intrvl.interval.denominator !=
+				cam_mod->active_config->frm_intrvl.interval.denominator)) {
+				if (cam_mod->frm_intrvl.interval.denominator >
+					cam_mod->active_config->frm_intrvl.interval.denominator) {
+					pltfrm_camera_module_pr_warn(&cam_mod->sd,
+						"sensor is not support stream: %dx%d@(%d/%d)fps!\n",
+						cam_mod->active_config->frm_fmt.width,
+						cam_mod->active_config->frm_fmt.height,
+						cam_mod->frm_intrvl.interval.denominator,
+						cam_mod->frm_intrvl.interval.numerator);
+					goto end;
+				}
+				vts = cam_mod->active_config->timings.frame_length_lines;
+				vts *= cam_mod->active_config->frm_intrvl.interval.denominator/
+					cam_mod->frm_intrvl.interval.denominator;
+				cam_mod->custom.s_vts(cam_mod, vts);
+			}
+		}
+
+		if (!cam_mod->inited && cam_mod->update_config)
+			cam_mod->inited = true;
 		cam_mod->update_config = false;
 		cam_mod->ctrl_updt = 0;
 		mdelay(cam_mod->custom.power_up_delays_ms[2]);
 		cam_mod->state = APTINA_CAMERA_MODULE_STREAMING;
-	}
-	else {
+
+	} else {
 		int pclk;
 		int wait_ms;
 		struct isp_supplemental_sensor_mode_data timings;
@@ -635,7 +735,7 @@ int aptina_camera_module_s_stream(struct v4l2_subdev *sd, int enable)
 			no pending frame left. */
 		msleep(wait_ms + 1);
 	}
-
+end:
 	cam_mod->state_before_suspend = cam_mod->state;
 
 	return 0;
@@ -854,6 +954,16 @@ int aptina_camera_module_g_ctrl(struct v4l2_subdev *sd,
 		}
 	}
 
+	if (ctrl->id == V4L2_CID_BAND_STOP_FILTER) {
+		struct v4l2_subdev *ircut_ctrl;
+
+		ircut_ctrl = pltfrm_camera_module_get_ircut_ctrl(sd);
+		if (!IS_ERR_OR_NULL(ircut_ctrl)) {
+			ret = v4l2_subdev_call(ircut_ctrl, core, g_ctrl, ctrl);
+			return ret;
+		}
+	}
+
 	if (!IS_ERR_OR_NULL(cam_mod->custom.g_ctrl)) {
 		ret = cam_mod->custom.g_ctrl(cam_mod, ctrl->id);
 		if (IS_ERR_VALUE(ret))
@@ -1032,6 +1142,29 @@ int aptina_camera_module_s_ext_ctrls(
 			"V4L2_CID_FOCUS_ABSOLUTE %d\n",
 			ctrl->value);
 			break;
+		case V4L2_CID_BAND_STOP_FILTER:
+			{
+				struct v4l2_subdev *ircut_ctrl;
+
+				ircut_ctrl = pltfrm_camera_module_get_ircut_ctrl
+						(sd);
+				if (!IS_ERR_OR_NULL(ircut_ctrl)) {
+					struct v4l2_control single_ctrl;
+
+					single_ctrl.id =
+						V4L2_CID_BAND_STOP_FILTER;
+					single_ctrl.value = ctrl->value;
+					ret = v4l2_subdev_call(
+						ircut_ctrl,
+						core, s_ctrl, &single_ctrl);
+					return ret;
+				}
+				pltfrm_camera_module_pr_debug(
+					&cam_mod->sd,
+					"V4L2_CID_BAND_STOP_FILTER %d\n",
+					ctrl->value);
+				break;
+			}
 		case V4L2_CID_HFLIP:
 			if (ctrl->value)
 				cam_mod->hflip = true;
@@ -1191,8 +1324,14 @@ long aptina_camera_module_ioctl(struct v4l2_subdev *sd,
 		pltfrm_camera_module_ioctl(sd, PLTFRM_CIFCAM_G_ITF_CFG, arg);
 		return 0;
 	} else if (cmd == PLTFRM_CIFCAM_ATTACH) {
-		pltfrm_camera_module_ioctl(sd, cmd, arg);
-		return aptina_camera_module_attach(cam_mod);
+		ret = aptina_camera_module_init(cam_mod, &cam_mod->custom);
+		if (!IS_ERR_VALUE(ret)) {
+			pltfrm_camera_module_ioctl(sd, cmd, arg);
+			return aptina_camera_module_attach(cam_mod);
+		} else {
+			aptina_camera_module_release(cam_mod);
+			return ret;
+		}
 	} else {
 		ret = pltfrm_camera_module_ioctl(sd, cmd, arg);
 		return ret;
@@ -1362,7 +1501,6 @@ int aptina_camera_module_init(struct aptina_camera_module *cam_mod,
 
 	pltfrm_camera_module_pr_debug(&cam_mod->sd, "\n");
 
-	cam_mod->custom = *custom;
 	aptina_camera_module_reset(cam_mod);
 
 	if (IS_ERR_OR_NULL(custom->start_streaming) ||

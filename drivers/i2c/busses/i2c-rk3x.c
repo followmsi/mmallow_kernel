@@ -58,7 +58,7 @@ enum {
 #define REG_CON_LASTACK   BIT(5) /* 1: send NACK after last received byte */
 #define REG_CON_ACTACK    BIT(6) /* 1: stop if NACK is received */
 
-#define REG_CON_TUNING_MASK GENMASK(15, 8)
+#define REG_CON_TUNING_MASK GENMASK_ULL(15, 8)
 
 #define REG_CON_SDA_CFG(cfg) ((cfg) << 8)
 #define REG_CON_STA_CFG(cfg) ((cfg) << 12)
@@ -220,6 +220,9 @@ struct rk3x_i2c {
 	enum rk3x_i2c_state state;
 	unsigned int processed;
 	int error;
+
+	/* NACK Retry flag */
+	u32 nack_retry;
 };
 
 static inline void i2c_writel(struct rk3x_i2c *i2c, u32 value,
@@ -369,9 +372,9 @@ static void rk3x_i2c_fill_transmit_buf(struct rk3x_i2c *i2c)
 static void rk3x_i2c_handle_start(struct rk3x_i2c *i2c, unsigned int ipd)
 {
 	if (!(ipd & REG_INT_START)) {
-		rk3x_i2c_stop(i2c, -EIO);
 		dev_warn(i2c->dev, "unexpected irq in START: 0x%x\n", ipd);
 		rk3x_i2c_clean_ipd(i2c);
+		rk3x_i2c_stop(i2c, -EIO);
 		return;
 	}
 
@@ -397,9 +400,9 @@ static void rk3x_i2c_handle_start(struct rk3x_i2c *i2c, unsigned int ipd)
 static void rk3x_i2c_handle_write(struct rk3x_i2c *i2c, unsigned int ipd)
 {
 	if (!(ipd & REG_INT_MBTF)) {
-		rk3x_i2c_stop(i2c, -EIO);
 		dev_err(i2c->dev, "unexpected irq in WRITE: 0x%x\n", ipd);
 		rk3x_i2c_clean_ipd(i2c);
+		rk3x_i2c_stop(i2c, -EIO);
 		return;
 	}
 
@@ -452,9 +455,9 @@ static void rk3x_i2c_handle_stop(struct rk3x_i2c *i2c, unsigned int ipd)
 	unsigned int con;
 
 	if (!(ipd & REG_INT_STOP)) {
-		rk3x_i2c_stop(i2c, -EIO);
 		dev_err(i2c->dev, "unexpected irq in STOP: 0x%x\n", ipd);
 		rk3x_i2c_clean_ipd(i2c);
+		rk3x_i2c_stop(i2c, -EIO);
 		return;
 	}
 
@@ -477,6 +480,7 @@ static irqreturn_t rk3x_i2c_irq(int irqno, void *dev_id)
 {
 	struct rk3x_i2c *i2c = dev_id;
 	unsigned int ipd;
+	int ret;
 
 	spin_lock(&i2c->lock);
 
@@ -502,8 +506,13 @@ static irqreturn_t rk3x_i2c_irq(int irqno, void *dev_id)
 
 		ipd &= ~REG_INT_NAKRCV;
 
-		if (!(i2c->msg->flags & I2C_M_IGNORE_NAK))
-			rk3x_i2c_stop(i2c, -ENXIO);
+		if (!(i2c->msg->flags & I2C_M_IGNORE_NAK)) {
+			dev_err(i2c->dev, "NACK IRQ: state %d, ipd: 0x%x\n",
+				i2c->state, ipd);
+			ret = i2c->nack_retry ? -EAGAIN : -ENXIO;
+			rk3x_i2c_stop(i2c, ret);
+			goto out;
+		}
 	}
 
 	/* is there anything left to handle? */
@@ -694,6 +703,8 @@ static int rk3x_i2c_v0_calc_timings(unsigned long clk_rate,
 	t_calc->div_low--;
 	t_calc->div_high--;
 
+	/* Give the tuning value 0, that would not update con register */
+	t_calc->tuning = 0;
 	/* Maximum divider supported by hw is 0xffff */
 	if (t_calc->div_low > 0xffff) {
 		t_calc->div_low = 0xffff;
@@ -742,7 +753,7 @@ static int rk3x_i2c_v1_calc_timings(unsigned long clk_rate,
 				    struct i2c_timings *t,
 				    struct rk3x_i2c_calced_timings *t_calc)
 {
-	unsigned long min_low_ns, min_high_ns, min_total_ns;
+	unsigned long min_low_ns, min_high_ns;
 	unsigned long min_setup_start_ns, min_setup_data_ns;
 	unsigned long min_setup_stop_ns, max_hold_data_ns;
 
@@ -793,7 +804,6 @@ static int rk3x_i2c_v1_calc_timings(unsigned long clk_rate,
 
 	/* These are the min dividers needed for min hold times. */
 	min_div_for_hold = (min_low_div + min_high_div);
-	min_total_ns = min_low_ns + min_high_ns;
 
 	/*
 	 * This is the maximum divider so we don't go over the maximum.
@@ -1111,6 +1121,15 @@ static int rk3x_i2c_xfer(struct i2c_adapter *adap,
 	return ret < 0 ? ret : num;
 }
 
+static __maybe_unused int rk3x_i2c_resume(struct device *dev)
+{
+	struct rk3x_i2c *i2c = dev_get_drvdata(dev);
+
+	rk3x_i2c_adapt_div(i2c, clk_get_rate(i2c->clk));
+
+	return 0;
+}
+
 static u32 rk3x_i2c_func(struct i2c_adapter *adap)
 {
 	return I2C_FUNC_I2C | I2C_FUNC_SMBUS_EMUL | I2C_FUNC_PROTOCOL_MANGLING;
@@ -1121,7 +1140,7 @@ static const struct i2c_algorithm rk3x_i2c_algorithm = {
 	.functionality		= rk3x_i2c_func,
 };
 
-static const struct rk3x_i2c_soc_data rk1108_soc_data = {
+static const struct rk3x_i2c_soc_data rv1108_soc_data = {
 	.grf_offset = -1,
 	.calc_timings = rk3x_i2c_v1_calc_timings,
 };
@@ -1141,6 +1160,11 @@ static const struct rk3x_i2c_soc_data rk3228_soc_data = {
 	.calc_timings = rk3x_i2c_v0_calc_timings,
 };
 
+static const struct rk3x_i2c_soc_data rk322xh_soc_data = {
+	.grf_offset = -1,
+	.calc_timings = rk3x_i2c_v1_calc_timings,
+};
+
 static const struct rk3x_i2c_soc_data rk3288_soc_data = {
 	.grf_offset = -1,
 	.calc_timings = rk3x_i2c_v0_calc_timings,
@@ -1152,10 +1176,6 @@ static const struct rk3x_i2c_soc_data rk3399_soc_data = {
 };
 
 static const struct of_device_id rk3x_i2c_match[] = {
-	{
-		.compatible = "rockchip,rk1108-i2c",
-		.data = (void *)&rk1108_soc_data
-	},
 	{
 		.compatible = "rockchip,rk3066-i2c",
 		.data = (void *)&rk3066_soc_data
@@ -1169,12 +1189,20 @@ static const struct of_device_id rk3x_i2c_match[] = {
 		.data = (void *)&rk3228_soc_data
 	},
 	{
+		.compatible = "rockchip,rk322xh-i2c",
+		.data = (void *)&rk322xh_soc_data
+	},
+	{
 		.compatible = "rockchip,rk3288-i2c",
 		.data = (void *)&rk3288_soc_data
 	},
 	{
 		.compatible = "rockchip,rk3399-i2c",
 		.data = (void *)&rk3399_soc_data
+	},
+	{
+		.compatible = "rockchip,rv1108-i2c",
+		.data = (void *)&rv1108_soc_data
 	},
 	{},
 };
@@ -1311,6 +1339,8 @@ static int rk3x_i2c_probe(struct platform_device *pdev)
 	clk_rate = clk_get_rate(i2c->clk);
 	rk3x_i2c_adapt_div(i2c, clk_rate);
 
+	of_property_read_u32(np, "nack-retry", &i2c->nack_retry);
+
 	ret = i2c_add_adapter(&i2c->adap);
 	if (ret < 0) {
 		dev_err(&pdev->dev, "Could not register adapter\n");
@@ -1343,16 +1373,29 @@ static int rk3x_i2c_remove(struct platform_device *pdev)
 	return 0;
 }
 
+static SIMPLE_DEV_PM_OPS(rk3x_i2c_pm_ops, NULL, rk3x_i2c_resume);
+
 static struct platform_driver rk3x_i2c_driver = {
 	.probe   = rk3x_i2c_probe,
 	.remove  = rk3x_i2c_remove,
 	.driver  = {
 		.name  = "rk3x-i2c",
 		.of_match_table = rk3x_i2c_match,
+		.pm = &rk3x_i2c_pm_ops,
 	},
 };
 
-module_platform_driver(rk3x_i2c_driver);
+static int __init rk3x_i2c_init_driver(void)
+{
+	return platform_driver_register(&rk3x_i2c_driver);
+}
+subsys_initcall(rk3x_i2c_init_driver);
+
+static void __exit rk3x_i2c_exit_driver(void)
+{
+	platform_driver_unregister(&rk3x_i2c_driver);
+}
+module_exit(rk3x_i2c_exit_driver);
 
 MODULE_DESCRIPTION("Rockchip RK3xxx I2C Bus driver");
 MODULE_AUTHOR("Max Schwarz <max.schwarz@online.de>");

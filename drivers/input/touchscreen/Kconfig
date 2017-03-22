@@ -16,6 +16,10 @@ config TOUCHSCREEN_ZET62XX
 	help
 	  zet62xx touchscreen driver
 
+config TOUCHSCREEN_GSL3673
+	tristate "gsl3673 touchscreen driver"
+	help
+	  gsl3673 touchscreen driver
 
 config GEEKBOX_GSLX680
 	tristate "Geekbox touchscreen driver"
@@ -939,4 +943,5 @@ config TOUCHSCREEN_TPS6507X
 	  To compile this driver as a module, choose M here: the
 	  module will be called tps6507x_ts.
 
+source "drivers/input/touchscreen/gt910/Kconfig"
 endif

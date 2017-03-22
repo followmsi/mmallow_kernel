@@ -14,8 +14,15 @@
  * kind, whether express or implied.
  *
  * Note:
- *    07/01/2014: new implementation using v4l2-subdev
- *                        instead of v4l2-int-device.
+ *
+ *v0.1.0:
+ *1. Initialize version;
+ *2. Stream on sensor in configuration, and stream off sensor after 1frame;
+ *3. Stream delay time is define in power_up_delays_ms[2];
+ *v0.1.1:
+ *1. Support config sensor gain and shutter time in ov_camera_module_custom_config.exposure_valid_frame;
+ *v0.1.2:
+ *1. Support v4l2 subdev api for s_frame_interval;
  */
 
 #include <linux/i2c.h>
@@ -180,10 +187,10 @@ static struct ov_camera_module_reg ov2710_init_tab_1920_1080_30fps[] = {
 {OV_CAMERA_MODULE_REG_TYPE_DATA, 0x3a1e, 0x30},
 {OV_CAMERA_MODULE_REG_TYPE_DATA, 0x3a11, 0x90},
 {OV_CAMERA_MODULE_REG_TYPE_DATA, 0x3a1f, 0x10},
-{OV_CAMERA_MODULE_REG_TYPE_DATA, 0x380c, 0x09},//HTS H
-{OV_CAMERA_MODULE_REG_TYPE_DATA, 0x380d, 0x74},//HTS L
-{OV_CAMERA_MODULE_REG_TYPE_DATA, 0x380e, 0x04},//VTS H
-{OV_CAMERA_MODULE_REG_TYPE_DATA, 0x380f, 0x50},//VTS L
+{OV_CAMERA_MODULE_REG_TYPE_DATA, 0x380c, 0x09},/*HTS H*/
+{OV_CAMERA_MODULE_REG_TYPE_DATA, 0x380d, 0x74},/*HTS L*/
+{OV_CAMERA_MODULE_REG_TYPE_DATA, 0x380e, 0x04},/*VTS H*/
+{OV_CAMERA_MODULE_REG_TYPE_DATA, 0x380f, 0x50},/*VTS L*/
 {OV_CAMERA_MODULE_REG_TYPE_DATA, 0x3500, 0x00},
 {OV_CAMERA_MODULE_REG_TYPE_DATA, 0x3501, 0x28},
 {OV_CAMERA_MODULE_REG_TYPE_DATA, 0x3502, 0x90},
@@ -199,7 +206,14 @@ static struct ov_camera_module_reg ov2710_init_tab_1920_1080_30fps[] = {
 {OV_CAMERA_MODULE_REG_TYPE_DATA, 0x3403, 0x00},
 {OV_CAMERA_MODULE_REG_TYPE_DATA, 0x3404, 0x04},
 {OV_CAMERA_MODULE_REG_TYPE_DATA, 0x3405, 0x00},
-{OV_CAMERA_MODULE_REG_TYPE_DATA, 0x4800, 0x24}
+{OV_CAMERA_MODULE_REG_TYPE_DATA, 0x4800, 0x24},
+{OV_CAMERA_MODULE_REG_TYPE_DATA, 0x4201, 0x00},
+{OV_CAMERA_MODULE_REG_TYPE_DATA, 0x4202, 0x00},
+{OV_CAMERA_MODULE_REG_TYPE_DATA, 0x3008, 0x02},
+{OV_CAMERA_MODULE_REG_TYPE_TIMEOUT, 0x0000, 40},
+{OV_CAMERA_MODULE_REG_TYPE_DATA, 0x3008, 0x42},
+{OV_CAMERA_MODULE_REG_TYPE_DATA, 0x4201, 0x00},
+{OV_CAMERA_MODULE_REG_TYPE_DATA, 0x4202, 0x0f}
 };
 
 /* ======================================================================== */
@@ -314,14 +328,11 @@ static int OV2710_auto_adjust_fps(struct ov_camera_module *cam_mod,
 	int ret;
 	u32 vts;
 
-	if ((cam_mod->exp_config.exp_time + OV2710_COARSE_INTG_TIME_MAX_MARGIN)
+	if ((exp_time + OV2710_COARSE_INTG_TIME_MAX_MARGIN)
 		> cam_mod->vts_min)
-		vts = cam_mod->exp_config.exp_time+OV2710_COARSE_INTG_TIME_MAX_MARGIN;
+		vts = exp_time+OV2710_COARSE_INTG_TIME_MAX_MARGIN;
 	else
 		vts = cam_mod->vts_min;
-
-	/*if (cam_mod->fps_ctrl > 0 && cam_mod->fps_ctrl < 100)
-		vts = vts * 100 / cam_mod->fps_ctrl;*/
 
 	if (vts > 0xfff)
 		vts = 0xfff;
@@ -335,12 +346,14 @@ static int OV2710_auto_adjust_fps(struct ov_camera_module *cam_mod,
 		OV2710_TIMING_VTS_HIGH_REG,
 		(vts >> 8) & 0x0F);
 
-	if (IS_ERR_VALUE(ret))
+	if (IS_ERR_VALUE(ret)) {
 		ov_camera_module_pr_err(cam_mod,
 				"failed with error (%d)\n", ret);
-	else
+	} else {
 		ov_camera_module_pr_debug(cam_mod,
 					  "updated vts = 0x%x,vts_min=0x%x\n", vts, cam_mod->vts_min);
+		cam_mod->vts_cur = vts;
+	}
 
 	return ret;
 }
@@ -623,18 +636,6 @@ static int ov2710_s_ctrl(struct ov_camera_module *cam_mod, u32 ctrl_id)
 	case V4L2_CID_EXPOSURE:
 		ret = ov2710_write_aec(cam_mod);
 		break;
-	case V4L2_CID_FLASH_LED_MODE:
-		/* nothing to be done here */
-		break;
-	case V4L2_CID_FOCUS_ABSOLUTE:
-		/* todo*/
-		break;
-	/*case RK_V4L2_CID_FPS_CTRL:
-		if (cam_mod->auto_adjust_fps)
-			ret = OV2710_auto_adjust_fps(
-				cam_mod,
-				cam_mod->exp_config.exp_time);
-		break;*/
 	default:
 		ret = -EINVAL;
 		break;
@@ -653,14 +654,8 @@ static int ov2710_s_ext_ctrls(struct ov_camera_module *cam_mod,
 {
 	int ret = 0;
 
-	/* Handles only exposure and gain together special case. */
-	if (ctrls->count == 1)
-		ret = ov2710_s_ctrl(cam_mod, ctrls->ctrls[0].id);
-	else if ((ctrls->count == 3) &&
-		(ctrls->ctrls[0].id == V4L2_CID_GAIN ||
-		ctrls->ctrls[0].id == V4L2_CID_EXPOSURE ||
-		ctrls->ctrls[1].id == V4L2_CID_GAIN ||
-		ctrls->ctrls[1].id == V4L2_CID_EXPOSURE))
+	if ((ctrls->ctrls[0].id == V4L2_CID_GAIN ||
+		ctrls->ctrls[0].id == V4L2_CID_EXPOSURE))
 		ret = ov2710_write_aec(cam_mod);
 	else
 		ret = -EINVAL;
@@ -690,7 +685,6 @@ static int ov2710_start_streaming(struct ov_camera_module *cam_mod)
 
 	if (IS_ERR_VALUE(ret))
 		goto err;
-	msleep(25);
 
 	return 0;
 err:
@@ -707,13 +701,12 @@ static int ov2710_stop_streaming(struct ov_camera_module *cam_mod)
 
 	ov_camera_module_pr_debug(cam_mod, "\n");
 	ret = ov_camera_module_write_reg(cam_mod, 0x3008, 0x42);
-	ret = ov_camera_module_write_reg(cam_mod, 0x4201, 0x00);
+	ret |= ov_camera_module_write_reg(cam_mod, 0x4201, 0x00);
 	ret |= ov_camera_module_write_reg(cam_mod, 0x4202, 0x0f);
 
 	if (IS_ERR_VALUE(ret))
 		goto err;
 
-	msleep(25);
 	return 0;
 err:
 	ov_camera_module_pr_err(cam_mod, "failed with error (%d)\n", ret);
@@ -802,6 +795,7 @@ static struct v4l2_subdev_video_ops ov2710_camera_module_video_ops = {
 	.g_mbus_fmt = ov_camera_module_g_fmt,
 	.try_mbus_fmt = ov_camera_module_try_fmt,
 	.s_frame_interval = ov_camera_module_s_frame_interval,
+	.g_frame_interval = ov_camera_module_g_frame_interval,
 	.s_stream = ov_camera_module_s_stream
 };
 
@@ -821,32 +815,34 @@ static struct ov_camera_module_custom_config ov2710_custom_config = {
 	.g_timings = ov2710_g_timings,
 	.set_flip = ov2710_set_flip,
 	.check_camera_id = ov2710_check_camera_id,
+	.s_vts = OV2710_auto_adjust_fps,
 	.configs = ov2710_configs,
 	.num_configs = sizeof(ov2710_configs) / sizeof(ov2710_configs[0]),
-	.power_up_delays_ms = {5, 30, 0}
+	.power_up_delays_ms = {5, 30, 30},
+	/*
+	*0: Exposure time valid fileds;
+	*1: Exposure gain valid fileds;
+	*(2 fileds == 1 frames)
+	*/
+	.exposure_valid_frame = {4, 2}
 };
 
 static int ov2710_probe(
 	struct i2c_client *client,
 	const struct i2c_device_id *id)
 {
-	int ret = 0;
-
 	dev_info(&client->dev, "probing...\n");
 
 	ov2710_filltimings(&ov2710_custom_config);
+
 	v4l2_i2c_subdev_init(&ov2710.sd, client,
 				&ov2710_camera_module_ops);
-	ret = ov_camera_module_init(&ov2710, &ov2710_custom_config);
-	if (IS_ERR_VALUE(ret))
-		goto err;
+	ov2710.sd.flags |= V4L2_SUBDEV_FL_HAS_DEVNODE;
+
+	ov2710.custom = ov2710_custom_config;
 
 	dev_info(&client->dev, "probing successful\n");
 	return 0;
-err:
-	dev_err(&client->dev, "probing failed with error (%d)\n", ret);
-	ov_camera_module_release(&ov2710);
-	return ret;
 }
 
 /* ======================================================================== */

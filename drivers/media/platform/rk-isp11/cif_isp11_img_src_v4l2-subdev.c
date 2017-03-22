@@ -64,6 +64,25 @@ static enum cif_isp11_pix_fmt img_src_v4l2_subdev_pix_fmt2cif_isp11_pix_fmt(
 	int img_src_pix_fmt)
 {
 	switch (img_src_pix_fmt) {
+	case V4L2_MBUS_FMT_Y8_1X8:
+		#if (CIF_ISP11_PIX_FMT_Y_AS_BAYER)
+		return CIF_BAYER_SBGGR8;
+		#else
+		return CIF_YUV400;
+		#endif
+	case V4L2_MBUS_FMT_Y10_1X10:
+		#if (CIF_ISP11_PIX_FMT_Y_AS_BAYER)
+		return CIF_BAYER_SBGGR10;
+		#else
+		return CIF_Y10;
+		#endif
+	case V4L2_MBUS_FMT_Y12_1X12:
+		#if (CIF_ISP11_PIX_FMT_Y_AS_BAYER)
+		return CIF_BAYER_SBGGR12;
+		#else
+		return CIF_Y12;
+		#endif
+
 	case V4L2_MBUS_FMT_YUYV8_1_5X8:
 	case V4L2_MBUS_FMT_YUYV8_2X8:
 	case V4L2_MBUS_FMT_YUYV10_2X10:
@@ -130,41 +149,59 @@ static int cif_isp11_pix_fmt2img_src_v4l2_subdev_pix_fmt(
 	enum cif_isp11_pix_fmt cif_isp11_pix_fmt)
 {
 	switch (cif_isp11_pix_fmt) {
+	case CIF_Y10:
+		return V4L2_MBUS_FMT_Y10_1X10;
+	case CIF_Y12:
+		return V4L2_MBUS_FMT_Y12_1X12;
+	case CIF_YUV400:
+		return V4L2_MBUS_FMT_Y8_1X8;
 	case CIF_YUV422I:
 		return V4L2_MBUS_FMT_YUYV8_2X8;
-    case CIF_UYV422I:
+	case CIF_UYV422I:
 		return V4L2_MBUS_FMT_UYVY8_2X8;
-    case CIF_RGB565:
+	case CIF_RGB565:
 		return V4L2_MBUS_FMT_RGB565_2X8_LE;
-    case CIF_RGB666:
+	case CIF_RGB666:
 		return V4L2_MBUS_FMT_RGB666_1X18;
-    case CIF_RGB888:
+	case CIF_RGB888:
 		return V4L2_MBUS_FMT_RGB888_1X24;
-    case CIF_BAYER_SBGGR8:
+	case CIF_BAYER_SBGGR8:
+		#if (CIF_ISP11_PIX_FMT_Y_AS_BAYER)
+		return V4L2_MBUS_FMT_Y8_1X8;
+		#else
 		return V4L2_MBUS_FMT_SBGGR8_1X8;
-    case CIF_BAYER_SGBRG8:
+		#endif
+	case CIF_BAYER_SGBRG8:
 		return V4L2_MBUS_FMT_SGBRG8_1X8;
-    case CIF_BAYER_SGRBG8:
+	case CIF_BAYER_SGRBG8:
 		return V4L2_MBUS_FMT_SGRBG8_1X8;
-    case CIF_BAYER_SRGGB8:
+	case CIF_BAYER_SRGGB8:
 		return V4L2_MBUS_FMT_SRGGB8_1X8;
-    case CIF_BAYER_SBGGR10:
+	case CIF_BAYER_SBGGR10:
+		#if (CIF_ISP11_PIX_FMT_Y_AS_BAYER)
+		return V4L2_MBUS_FMT_Y10_1X10;
+		#else
 		return V4L2_MBUS_FMT_SBGGR10_1X10;
-    case CIF_BAYER_SGBRG10:
+		#endif
+	case CIF_BAYER_SGBRG10:
 		return V4L2_MBUS_FMT_SGBRG10_1X10;
-    case CIF_BAYER_SGRBG10:
+	case CIF_BAYER_SGRBG10:
 		return V4L2_MBUS_FMT_SGRBG10_1X10;
-    case CIF_BAYER_SRGGB10:
+	case CIF_BAYER_SRGGB10:
 		return V4L2_MBUS_FMT_SRGGB10_1X10;
-    case CIF_BAYER_SBGGR12:
+	case CIF_BAYER_SBGGR12:
+		#if (CIF_ISP11_PIX_FMT_Y_AS_BAYER)
+		return V4L2_MBUS_FMT_Y12_1X12;
+		#else
 		return V4L2_MBUS_FMT_SBGGR12_1X12;
-    case CIF_BAYER_SGBRG12:
+		#endif
+	case CIF_BAYER_SGBRG12:
 		return V4L2_MBUS_FMT_SGBRG12_1X12;
-    case CIF_BAYER_SGRBG12:
+	case CIF_BAYER_SGRBG12:
 		return V4L2_MBUS_FMT_SGRBG12_1X12;
-    case CIF_BAYER_SRGGB12:
+	case CIF_BAYER_SRGGB12:
 		return V4L2_MBUS_FMT_SRGGB12_1X12;
-    case CIF_JPEG:
+	case CIF_JPEG:
 		return V4L2_MBUS_FMT_JPEG_1X8;
 	default:
 		return -EINVAL;
@@ -206,6 +243,8 @@ static int cif_isp11_v4l2_cid2v4l2_cid(u32 cif_isp11_cid)
 		return V4L2_CID_HFLIP;
 	case CIF_ISP11_CID_VFLIP:
 		return V4L2_CID_VFLIP;
+	case CIF_ISP11_CID_BAND_STOP_FILTER:
+		return V4L2_CID_BAND_STOP_FILTER;
 	default:
 		cif_isp11_pltfrm_pr_err(NULL,
 			"unknown/unsupported CIF ISP20 ID %d\n",
@@ -300,20 +339,60 @@ int cif_isp11_img_src_v4l2_subdev_s_strm_fmt(
 	int ret = 0;
 	struct v4l2_subdev *subdev = img_src;
 	struct v4l2_mbus_framefmt format;
-	struct v4l2_subdev_frame_interval intrvl;
 
-    format.code = cif_isp11_pix_fmt2img_src_v4l2_subdev_pix_fmt(
+	format.code = cif_isp11_pix_fmt2img_src_v4l2_subdev_pix_fmt(
 		strm_fmt->frm_fmt.pix_fmt);
-    format.width = strm_fmt->frm_fmt.width;
-    format.height = strm_fmt->frm_fmt.height;
+	format.width = strm_fmt->frm_fmt.width;
+	format.height = strm_fmt->frm_fmt.height;
 	ret = v4l2_subdev_call(subdev, video, s_mbus_fmt, &format);
 	if (IS_ERR_VALUE(ret))
 		goto err;
-	intrvl.interval.numerator = strm_fmt->frm_intrvl.numerator;
-	intrvl.interval.denominator = strm_fmt->frm_intrvl.denominator;
-	ret = v4l2_subdev_call(subdev, video, s_frame_interval, &intrvl);
+
+	return 0;
+err:
+	pr_err("img_src.%s ERR: failed with error %d\n", __func__, ret);
+	return ret;
+}
+
+int cif_isp11_img_src_v4l2_subdev_s_frame_interval(
+	void *img_src,
+	struct cif_isp11_frm_intrvl *frm_intrvl)
+{
+	int ret = 0;
+	struct v4l2_subdev *subdev = img_src;
+	struct v4l2_subdev_frame_interval interval;
+
+	interval.interval.numerator = frm_intrvl->numerator;
+	interval.interval.denominator = frm_intrvl->denominator;
+
+	ret = v4l2_subdev_call(subdev, video, s_frame_interval, &interval);
 	if (IS_ERR_VALUE(ret))
 		goto err;
+
+	return 0;
+err:
+	pr_err("img_src.%s ERR: failed with error %d\n", __func__, ret);
+	return ret;
+}
+
+int cif_isp11_img_src_v4l2_subdev_g_frame_interval(
+	void *img_src,
+	struct cif_isp11_frm_intrvl *frm_intrvl)
+{
+	int ret = 0;
+	struct v4l2_subdev *subdev = img_src;
+	struct v4l2_subdev_frame_interval interval;
+
+	interval.interval.numerator = 0;
+	interval.interval.denominator = 0;
+
+	ret = v4l2_subdev_call(subdev, video, g_frame_interval, &interval);
+	if (IS_ERR_VALUE(ret))
+		goto err;
+
+	frm_intrvl->denominator = interval.interval.denominator;
+	frm_intrvl->numerator = interval.interval.numerator;
+
 	return 0;
 err:
 	pr_err("img_src.%s ERR: failed with error %d\n", __func__, ret);
@@ -446,6 +525,7 @@ long cif_isp11_img_src_v4l2_subdev_ioctl(
 	case PLTFRM_CIFCAM_G_ITF_CFG:
 	case PLTFRM_CIFCAM_G_DEFRECT:
 	case PLTFRM_CIFCAM_ATTACH:
+	case PLTFRM_CIFCAM_R_LIGHTSENSOR:
 		ret = v4l2_subdev_call(subdev,
 			core,
 			ioctl,

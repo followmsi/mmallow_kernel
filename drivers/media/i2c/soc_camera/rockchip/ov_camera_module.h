@@ -28,8 +28,8 @@
 #define OV_CAMERA_MODULE_REG_TYPE_TIMEOUT PLTFRM_CAMERA_MODULE_REG_TYPE_TIMEOUT
 #define ov_camera_module_csi_config
 #define ov_camera_module_reg pltfrm_camera_module_reg
-#define OV_FLIP_BIT_MASK				   0x2
-#define OV_MIRROR_BIT_MASK				   0x1
+#define OV_FLIP_BIT_MASK				   (1 << PLTFRM_CAMERA_MODULE_FLIP_BIT)
+#define OV_MIRROR_BIT_MASK				   (1 << PLTFRM_CAMERA_MODULE_MIRROR_BIT)
 
 #define OV_CAMERA_MODULE_CTRL_UPDT_GAIN				0x01
 #define OV_CAMERA_MODULE_CTRL_UPDT_EXP_TIME			0x02
@@ -152,7 +152,8 @@ struct ov_camera_module_custom_config {
 	int (*g_ctrl)(struct ov_camera_module *cam_mod, u32 ctrl_id);
 	int (*g_timings)(struct ov_camera_module *cam_mod,
 		struct ov_camera_module_timings *timings);
-	int (*g_exposure_valid_frame)(struct ov_camera_module *cam_mod);
+	int (*s_vts)(struct ov_camera_module *cam_mod,
+		u32 vts);
 	int (*s_ext_ctrls)(struct ov_camera_module *cam_mod,
 		struct ov_camera_module_ext_ctrls *ctrls);
 	int (*set_flip)(
@@ -164,6 +165,7 @@ struct ov_camera_module_custom_config {
 	struct ov_camera_module_config *configs;
 	u32 num_configs;
 	u32 power_up_delays_ms[3];
+	unsigned char exposure_valid_frame[2];
 	void *priv;
 };
 
@@ -240,6 +242,10 @@ int ov_camera_module_g_fmt(struct v4l2_subdev *sd,
 	struct v4l2_mbus_framefmt *fmt);
 
 int ov_camera_module_s_frame_interval(
+	struct v4l2_subdev *sd,
+	struct v4l2_subdev_frame_interval *interval);
+
+int ov_camera_module_g_frame_interval(
 	struct v4l2_subdev *sd,
 	struct v4l2_subdev_frame_interval *interval);
 

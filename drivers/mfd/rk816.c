@@ -86,7 +86,9 @@ static struct mfd_cell rk816_cells[] = {
 		.name = "rk816-battery",
 	},
 	{
-		.name = "rk816-gpio",
+		.name = "rk8xx-gpio",
+		.platform_data = &rk816_platform_data,
+		.pdata_size = sizeof(struct rk8xx_platform_data),
 	},
 };
 
@@ -107,6 +109,11 @@ static struct mfd_cell rk805_cells[] = {
 		.platform_data = &rk805_platform_data,
 		.pdata_size = sizeof(struct rk8xx_platform_data),
 	},
+	{
+		.name = "rk8xx-gpio",
+		.platform_data = &rk805_platform_data,
+		.pdata_size = sizeof(struct rk8xx_platform_data),
+	},
 };
 
 int rk816_i2c_read(struct rk816 *rk816, char reg, int count, u8 *dest)
@@ -117,8 +124,7 @@ int rk816_i2c_read(struct rk816 *rk816, char reg, int count, u8 *dest)
 	struct i2c_msg msgs[2];
 
 	if (!i2c)
-		return ret;
-
+		return -EINVAL;
 	if (count != 1)
 		return -EIO;
 
@@ -139,19 +145,20 @@ int rk816_i2c_read(struct rk816 *rk816, char reg, int count, u8 *dest)
 	ret = i2c_transfer(adap, msgs, 2);
 
 	RK816_DBG("***run in %s %x  %x\n", __func__, i2c->addr, *(msgs[1].buf));
-	return ret;
+
+	return (ret < 0) ? ret : 0;
 }
 
 int rk816_i2c_write(struct rk816 *rk816, char reg, int count,  const u8 src)
 {
-	int ret = -1;
+	int ret;
 	struct i2c_client *i2c = rk816->i2c;
 	struct i2c_adapter *adap;
 	struct i2c_msg msg;
 	char tx_buf[2];
 
 	if (!i2c)
-		return ret;
+		return -EINVAL;
 	if (count != 1)
 		return -EIO;
 
@@ -166,7 +173,8 @@ int rk816_i2c_write(struct rk816 *rk816, char reg, int count,  const u8 src)
 	msg.scl_rate = RK816_I2C_SPEED;
 
 	ret = i2c_transfer(adap, &msg, 1);
-	return ret;
+
+	return (ret < 0) ? ret : 0;
 }
 
 int rk816_reg_read(struct rk816 *rk816, u8 reg)
@@ -181,6 +189,7 @@ int rk816_reg_read(struct rk816 *rk816, u8 reg)
 		  (int)reg, (unsigned)val & 0xff);
 	if (ret < 0) {
 		mutex_unlock(&rk816->io_lock);
+		dev_err(rk816->dev, "read reg 0x%x failed: %d\n", reg, ret);
 		return ret;
 	}
 	mutex_unlock(&rk816->io_lock);
@@ -197,7 +206,7 @@ int rk816_reg_write(struct rk816 *rk816, u8 reg, u8 val)
 
 	err = rk816_i2c_write(rk816, reg, 1, val);
 	if (err < 0)
-		dev_err(rk816->dev, "Write for reg 0x%x failed\n", reg);
+		dev_err(rk816->dev, "write reg 0x%x failed: %d\n", reg, err);
 
 	mutex_unlock(&rk816->io_lock);
 	return err;
@@ -548,6 +557,8 @@ static struct rk8xx_reg_data rk805_init_reg[] = {
 	{RK805_INT_STS_REG, ALL_INT_FLAGS_ST, REG_WRITE_MSK},
 	/* sleep pin set as default: sleep mode */
 	{RK805_GPIO_IO_POL_REG, SLEEP_FUN, SLP_SD_MSK},
+	/* hotdie temperature: 115c */
+	{RK805_THERMAL_REG, TEMP115C, TEMP_HOTDIE_MSK},
 };
 
 static int rk816_pre_init_regs(struct rk816 *rk816)

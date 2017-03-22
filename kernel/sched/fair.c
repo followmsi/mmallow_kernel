@@ -1838,6 +1838,7 @@ static void enqueue_sleeper(struct cfs_rq *cfs_rq, struct sched_entity *se)
 			}
 
 			trace_sched_stat_blocked(tsk, delta);
+			trace_sched_blocked_reason(tsk);
 
 			/*
 			 * Blocking time is in units of nanosecs, so shift by
@@ -4172,7 +4173,7 @@ static void hmp_attr_add(
 static int hmp_attr_init(void)
 {
 	int ret;
-	memset(&hmp_data, sizeof(hmp_data), 0);
+	memset(&hmp_data, 0, sizeof(hmp_data));
 	hmp_attr_add("hmp_domains",
 		NULL,
 		NULL,

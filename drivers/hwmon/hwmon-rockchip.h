@@ -14,7 +14,7 @@ struct rockchip_temp;
 
 #define RK3288_TSADC	0
 #define RK322X_TSADC	1
-#define RK1108_TSADC	2
+#define RV1108_TSADC	2
 
 /*
  * struct rockchip_temp_ops - rockchip chip specific ops
@@ -56,9 +56,9 @@ struct rockchip_temp {
 	struct device *hwmon_dev;
 	struct rockchip_temp_ops ops;
 	u8 tsadc_addr[NUM_SENSORS];
-	unsigned long min[NUM_SENSORS];
-	unsigned long max[NUM_SENSORS];
-	unsigned long max_hyst[NUM_SENSORS];
+	long min[NUM_SENSORS];
+	long max[NUM_SENSORS];
+	long max_hyst[NUM_SENSORS];
 	bool min_alarm[NUM_SENSORS];
 	bool max_alarm[NUM_SENSORS];
 	struct delayed_work work;

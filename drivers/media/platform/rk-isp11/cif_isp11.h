@@ -128,7 +128,7 @@ enum cif_isp11_cid {
 	CIF_ISP11_CID_AUTO_FPS = 16,
 	CIF_ISP11_CID_VBLANKING = 17,
 	CIF_ISP11_CID_ISO_SENSITIVITY = 18,
-
+	CIF_ISP11_CID_BAND_STOP_FILTER = 19,
 };
 
 /* correspond to bit field values */
@@ -212,12 +212,13 @@ enum cif_isp11_image_effect {
 	(!CIF_ISP11_PIX_FMT_IS_YUV(pix_fmt) ||\
 	!CIF_ISP11_PIX_FMT_YUV_GET_NUM_CPLANES(pix_fmt))
 
-
+#define CIF_ISP11_PIX_FMT_Y_AS_BAYER	0
 
 enum cif_isp11_pix_fmt {
 	/* YUV */
 	CIF_YUV400				= 0x10008000,
 	CIF_YVU400				= 0x10008004,
+	CIF_Y10					= 0x1000a000,
 	CIF_Y12 				= 0x10010000,/* bpp is 16bit */
 	CIF_Y12_420SP			= 0x10014211,/* bpp is 20bit */
 	CIF_Y12_422SP			= 0x10018221,/* bpp is 24bit */
@@ -288,12 +289,12 @@ enum cif_isp11_pix_fmt {
 	CIF_BAYER_SRGGB12		= 0x3000c030,
 
 	/* JPEG */
-	CIF_JPEG					= 0x40008000,
+	CIF_JPEG                        = 0x40008000,
 
 	/* Data */
-	CIF_DATA					= 0x70000000,
+	CIF_DATA                        = 0x70000000,
 
-	CIF_UNKNOWN_FORMAT	= 0x80000000
+	CIF_UNKNOWN_FORMAT              = 0x80000000
 };
 
 enum cif_isp11_stream_id {
@@ -529,7 +530,7 @@ struct cif_isp11_mi_state {
 
 struct cif_isp11_img_src_exp {
 	struct list_head list;
-	struct cif_isp11_img_src_ext_ctrl *exp;
+	struct cif_isp11_img_src_ext_ctrl exp;
 };
 
 struct cif_isp11_img_src_data {
@@ -543,11 +544,13 @@ struct cif_isp11_img_src_exps {
 
 	struct mutex mutex;	/* protect frm_exp */
 	struct cif_isp11_img_src_data data[2];
-	unsigned char exp_valid_frms;
+	unsigned char exp_valid_frms[2];
 };
 
 enum cif_isp11_isp_vs_cmd {
-	CIF_ISP11_VS_EXP = 0,
+	CIF_ISP11_VS_EXIT = 0,
+	CIF_ISP11_VS_EXP = 1
+
 };
 
 struct cif_isp11_isp_vs_work {

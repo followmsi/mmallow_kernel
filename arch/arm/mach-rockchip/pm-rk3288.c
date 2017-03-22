@@ -96,6 +96,8 @@ enum rk_plls_id {
 
 #define RKPM_BOOT_CPUSP_PHY (RKPM_BOOTRAM_PHYS+((RKPM_BOOTRAM_SIZE-1)&~0x7))
 
+#define SGRF_DAPDEVICEEN_WRITE		BIT(16)
+
 // the value is used to control cpu resume flow
 static u32 sleep_resume_data[RKPM_BOOTDATA_ARR_SIZE];
 static char *resume_data_base=(char *)( RKPM_BOOT_DATA_BASE);
@@ -123,11 +125,10 @@ ddr code and data
 static void sram_data_for_sleep(char *boot_save, char *int_save,u32 flag)
 {	
  	
-	char *addr_base,*addr_phy,*data_src,*data_dst;
+	char *addr_base,*data_src,*data_dst;
 	u32 sr_size,data_size;
 
 	addr_base=(char *)RKPM_BOOTRAM_BASE;
-	addr_phy=(char *)RKPM_BOOTRAM_PHYS;
 	sr_size=RKPM_BOOTRAM_SIZE;
 
  	// save boot sram
@@ -167,20 +168,15 @@ static void sram_data_for_sleep(char *boot_save, char *int_save,u32 flag)
 
                 /*************************ddr code cpy  end*************************************/
                 flush_icache_range((unsigned long)addr_base, (unsigned long)addr_base + sr_size);
-                outer_clean_range((phys_addr_t) addr_phy, (phys_addr_t)(addr_phy)+sr_size);
                 /*************************int mem bak*************************************/
                 // int mem
                 addr_base=(char *)rockchip_sram_virt;
-                addr_phy=(char *)pie_to_phys(rockchip_pie_chunk,(unsigned long )rockchip_sram_virt);
                 sr_size=rockchip_sram_size;
-                //  rkpm_ddr_printascii("piephy\n");
-                //rkpm_ddr_printhex(addr_phy);
                 //mmap
                 if(int_save)
                     memcpy(int_save,addr_base, sr_size);
 
                 flush_icache_range((unsigned long)addr_base, (unsigned long)addr_base + sr_size);
-                outer_clean_range((phys_addr_t) addr_phy, (phys_addr_t)(addr_phy)+sr_size);
         }    
      
  }
@@ -188,31 +184,27 @@ static void sram_data_for_sleep(char *boot_save, char *int_save,u32 flag)
 static void sram_data_resume(char *boot_save, char *int_save,u32 flag)
 {  
  
-    char *addr_base,*addr_phy;
+    char *addr_base;
     u32 sr_size;
     
     addr_base=(char *)RKPM_BOOTRAM_BASE;
-    addr_phy=(char *)RKPM_BOOTRAM_PHYS;
     sr_size=RKPM_BOOTRAM_SIZE;
     // save boot sram
     if(boot_save)
         memcpy(addr_base,boot_save, sr_size);
 
     flush_icache_range((unsigned long)addr_base, (unsigned long)addr_base + sr_size);
-    outer_clean_range((phys_addr_t) addr_phy, (phys_addr_t)addr_phy+sr_size);
 
     if(flag)
     {
         // int mem
         addr_base=(char *)rockchip_sram_virt;
-        addr_phy=(char *)pie_to_phys(rockchip_pie_chunk,(unsigned long )rockchip_sram_virt);
         sr_size=rockchip_sram_size;
 
         if(int_save)
         memcpy(addr_base, int_save,sr_size);
 
         flush_icache_range((unsigned long)addr_base, (unsigned long)addr_base + sr_size);
-        outer_clean_range((phys_addr_t) addr_phy,(unsigned long)addr_phy+sr_size);
      }
 }
 
@@ -932,6 +924,7 @@ static u32  rkpm_slp_mode_set(u32 ctrbits)
     u32 mode_set,mode_set1;
     // setting gpio0_a0 arm off pin
 
+	reg_writel(SGRF_DAPDEVICEEN_WRITE, RK_SGRF_VIRT + RK3288_SGRF_CPU_CON0);
     sgrf_soc_con0=reg_readl(RK_SGRF_VIRT+RK3288_SGRF_SOC_CON0);
     
     pmu_wakeup_cfg0=pmu_readl(RK3288_PMU_WAKEUP_CFG0);  
@@ -1054,6 +1047,7 @@ static u32  rkpm_slp_mode_set(u32 ctrbits)
 static inline void  rkpm_slp_mode_set_resume(void)
 {
 
+	reg_writel(SGRF_DAPDEVICEEN_WRITE, RK_SGRF_VIRT + RK3288_SGRF_CPU_CON0);
     pmu_writel(pmu_wakeup_cfg0,RK3288_PMU_WAKEUP_CFG0);  
     pmu_writel(pmu_wakeup_cfg1,RK3288_PMU_WAKEUP_CFG1);  
     
@@ -1113,7 +1107,6 @@ static void sram_code_data_save(u32 pwrmode)
 	sram_data_for_sleep(boot_ram_data,int_ram_data,sleep_resume_data[RKPM_BOOTDATA_DDR_F]);
     
         flush_cache_all();
-        outer_flush_all();
         local_flush_tlb_all();
 
 }
@@ -2453,7 +2446,6 @@ static  void interface_ctr_reg_pread(void)
 {
 	//u32 addr;
 	flush_cache_all();
-	outer_flush_all();
 	local_flush_tlb_all();
         #if 0  // do it in ddr suspend 
 	for (addr = (u32)SRAM_CODE_OFFSET; addr < (u32)(SRAM_CODE_OFFSET+rockchip_sram_size); addr += PAGE_SIZE)

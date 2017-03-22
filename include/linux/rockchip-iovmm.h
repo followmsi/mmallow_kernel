@@ -20,6 +20,8 @@
 #define HEVC_IOMMU_COMPATIBLE_NAME "rockchip,hevc_mmu"
 #define VPU_IOMMU_COMPATIBLE_NAME "rockchip,vpu_mmu"
 #define VDEC_IOMMU_COMPATIBLE_NAME "rockchip,vdec_mmu"
+#define H265E_IOMMU_COMPATIBLE_NAME "rockchip,h265e_mmu"
+#define VEPU_IOMMU_COMPATIBLE_NAME "rockchip,vepu_mmu"
 
 enum rk_iommu_inttype {
 	IOMMU_PAGEFAULT,
@@ -52,6 +54,10 @@ struct device;
 
 int rockchip_iovmm_activate(struct device *dev);
 void rockchip_iovmm_deactivate(struct device *dev);
+
+int rockchip_iovmm_map_iova(struct device *dev,
+			    unsigned long addr, phys_addr_t phys, size_t len);
+void rockchip_iovmm_unmap_iova(struct device *dev, dma_addr_t iova);
 
 /* rockchip_iovmm_map() - Maps a list of physical memory chunks
  * @dev: the owner of the IO address space where the mapping is created

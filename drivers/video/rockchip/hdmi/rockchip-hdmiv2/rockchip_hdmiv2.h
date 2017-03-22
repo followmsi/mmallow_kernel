@@ -10,13 +10,6 @@
 #endif
 #include "../rockchip-hdmi.h"
 
-#ifdef DEBUG
-#define HDMIDBG(format, ...) \
-		pr_info(format, ## __VA_ARGS__)
-#else
-#define HDMIDBG(format, ...)
-#endif
-
 #define HDMI_PD_ON		BIT(0)
 #define HDMI_PCLK_ON		BIT(1)
 #define HDMI_HDCPCLK_ON		BIT(2)
@@ -48,6 +41,8 @@ struct hdmi_dev {
 	struct device		*dev;
 	struct dentry		*debugfs_dir;
 	int			irq;
+	int			irq_phy;
+	int			cecirq;
 
 	struct work_struct	irq_work;
 	struct delayed_work	delay_work;

@@ -168,7 +168,12 @@ static int	rk_dts_sensor_probe(struct platform_device *pdev)
 		
 		char sensor_name[20] = {0};
 		char *name = NULL;
-		
+		const char *status = NULL;
+
+		of_property_read_string(cp, "status", &status);
+		if (status && !strcmp(status, "disabled"))
+			continue;
+
 		strcpy(sensor_name,cp->name);
 		name = sensor_name;
 		if(strstr(sensor_name,"_") != NULL){			
@@ -246,7 +251,69 @@ static int	rk_dts_sensor_probe(struct platform_device *pdev)
 		if (of_property_read_u32(cp, "orientation", &orientation)) {
 			printk("%s:Get %s rockchip,orientation failed!\n",__func__, cp->name);				
 		}
-		
+
+		of_property_read_u32_array(
+			cp,
+			"rockchip,camera-module-defrect0",
+			(unsigned int *)&new_camera->defrects[0],
+			6);
+		of_property_read_string(
+			cp,
+			"rockchip,camera-module-interface0",
+			&new_camera->defrects[0].interface);
+		of_property_read_u32_array(
+			cp,
+			"rockchip,camera-module-defrect1",
+			(unsigned int *)&new_camera->defrects[1],
+			6);
+		of_property_read_string(
+			cp,
+			"rockchip,camera-module-interface1",
+			&new_camera->defrects[1].interface);
+		of_property_read_u32_array(
+			cp,
+			"rockchip,camera-module-defrect2",
+			(unsigned int *)&new_camera->defrects[2],
+			6);
+		of_property_read_string(
+			cp,
+			"rockchip,camera-module-interface2",
+			&new_camera->defrects[2].interface);
+		of_property_read_u32_array(
+			cp,
+			"rockchip,camera-module-defrect3",
+			(unsigned int *)&new_camera->defrects[3],
+			6);
+		of_property_read_string(
+			cp,
+			"rockchip,camera-module-interface3",
+			&new_camera->defrects[3].interface);
+		of_property_read_u32_array(
+			cp,
+			"rockchip,camera-module-channel",
+			(unsigned int *)&new_camera->channel_info,
+			2);
+		of_property_read_string(
+			cp,
+			"rockchip,camera-module-ain-1",
+			&new_camera->channel_info.channel_info[0]);
+		of_property_read_string(
+			cp,
+			"rockchip,camera-module-ain-2",
+			&new_camera->channel_info.channel_info[1]);
+		of_property_read_string(
+			cp,
+			"rockchip,camera-module-ain-3",
+			&new_camera->channel_info.channel_info[2]);
+		of_property_read_string(
+			cp,
+			"rockchip,camera-module-ain-4",
+			&new_camera->channel_info.channel_info[3]);
+		of_property_read_string(
+			cp,
+			"rockchip,camera-module-ain-5",
+			&new_camera->channel_info.channel_info[4]);
+
 		strcpy(new_camera->dev.i2c_cam_info.type, name);
 		new_camera->dev.i2c_cam_info.addr = i2c_add>>1;
 		new_camera->dev.desc_info.host_desc.bus_id = RK29_CAM_PLATFORM_DEV_ID+cif_chl;
@@ -263,6 +330,7 @@ static int	rk_dts_sensor_probe(struct platform_device *pdev)
 		new_camera->io.gpio_power = power;
 		new_camera->io.gpio_af = af;
 		new_camera->io.gpio_flash = flash;
+		new_camera->io.gpio_irq = of_get_named_gpio_flags(cp, "irq_active", 0, NULL);
 		new_camera->io.gpio_flag = ((pwr_active&0x01)<<RK29_CAM_POWERACTIVE_BITPOS)
 									|((rst_active&0x01)<<RK29_CAM_RESETACTIVE_BITPOS)
 									|((pwdn_active&0x01)<<RK29_CAM_POWERDNACTIVE_BITPOS)
@@ -297,21 +365,22 @@ static int	rk_dts_sensor_probe(struct platform_device *pdev)
 		}
 		
 		if (of_property_read_u32(cp, "rockchip,powerdown_pmu_voltage", &(new_camera->powerdown_pmu_voltage))) {
-			dprintk("%s:Get %s rockchip,resolution failed!\n",__func__, cp->name);				
+			dprintk("%s:Get %s rockchip,powerdown_pmu_voltage failed!\n", __func__, cp->name);
 		}
 		if (of_property_read_u32(cp, "rockchip,power_pmu_voltage1", &(new_camera->power_pmu_voltage1))) {
-			dprintk("%s:Get %s rockchip,resolution failed!\n",__func__, cp->name);				
+			dprintk("%s:Get %s rockchip,power_pmu_voltage1 failed!\n", __func__, cp->name);
 		}
 		if (of_property_read_u32(cp, "rockchip,power_pmu_voltage2", &(new_camera->power_pmu_voltage2))) {
-			dprintk("%s:Get %s rockchip,resolution failed!\n",__func__, cp->name);				
+			dprintk("%s:Get %s rockchip,power_pmu_voltage2 failed!\n", __func__,  cp->name);
 		}
-			debug_printk( "******************* /n power = %x\n", power);
-			debug_printk( "******************* /n powerdown = %x\n", powerdown);
-			debug_printk( "******************* /n i2c_add = %x\n", new_camera->dev.i2c_cam_info.addr << 1);
-			debug_printk( "******************* /n i2c_chl = %d\n", new_camera->dev.desc_info.host_desc.i2c_adapter_id);
-			debug_printk( "******************* /n init_name = %s\n", new_camera->dev.device_info.dev.init_name);
-			debug_printk( "******************* /n dev_name = %s\n", new_camera->dev_name);
-			debug_printk( "******************* /n module_name = %s\n", new_camera->dev.desc_info.host_desc.module_name);
+			debug_printk("******************* /n power = %x\n", power);
+			debug_printk("******************* /n powerdown = %x\n", powerdown);
+			debug_printk("******************* /n i2c_add = %x\n", new_camera->dev.i2c_cam_info.addr << 1);
+			debug_printk("******************* /n i2c_chl = %d\n", new_camera->dev.desc_info.host_desc.i2c_adapter_id);
+			debug_printk("******************* /n init_name = %s\n", new_camera->dev.device_info.dev.init_name);
+			debug_printk("******************* /n dev_name = %s\n", new_camera->dev_name);
+			debug_printk("******************* /n module_name = %s\n", new_camera->dev.desc_info.host_desc.module_name);
+			debug_printk("******************* /n irq_active = %d\n", new_camera->io.gpio_irq);
 	};
 	new_camera_list->next_camera = NULL;
 	return 0;
@@ -358,7 +427,9 @@ static int rk_dts_cif_probe(struct platform_device *pdev)
 		printk("get vpu_node failed,vpu_iommu_enabled == 0 !!!!!!\n");
 	}
 	
-	if(strstr(rk_camera_platform_data.rockchip_name,"3368")){
+	if (strstr(rk_camera_platform_data.rockchip_name, "3368") ||
+	    strstr(rk_camera_platform_data.rockchip_name, "px5") ||
+		strstr(rk_camera_platform_data.rockchip_name, "rk3228h")) {
 		//get cru base
 	    vpu_node = of_parse_phandle(dev->of_node, "rockchip,cru", 0);
 	    rk_cif_cru_base = (unsigned long)of_iomap(vpu_node, 0);
@@ -674,7 +745,7 @@ static int _rk_sensor_io_init_(struct rk29camera_gpio_res *gpio_res,struct devic
 
     if (camera_reset != INVALID_GPIO) {
 		
-		camera_power = of_get_named_gpio_flags(of_node,"rockchip,reset",0,&flags);
+		camera_reset = of_get_named_gpio_flags(of_node, "rockchip,reset", 0, &flags);
 		gpio_res->gpio_reset = camera_reset;/* information back to the IO*/
         ret = gpio_request(camera_reset, "camera reset");
         if (ret) {
@@ -973,7 +1044,6 @@ static int rk_sensor_ioctrl(struct device *dev,enum rk29camera_ioctrl_cmd cmd, i
                 WARN_ON(1);
 			}
 
-			printk("ret: %d\n",ret);
 			break;
 		}
 		case Cam_Reset:

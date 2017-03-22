@@ -25,6 +25,7 @@
 #include <linux/reboot.h>
 #include <linux/rockchip/cpu.h>
 #include <linux/tick.h>
+#include <linux/cpu.h>
 #include <dt-bindings/clock/rk_system_status.h>
 #include "../../../drivers/clk/rockchip/clk-pd.h"
 #include "efuse.h"
@@ -42,7 +43,7 @@ static int pd_gpu_off, early_suspend;
 static DEFINE_MUTEX(switch_vdd_gpu_mutex);
 struct regulator *vdd_gpu_regulator;
 static DEFINE_MUTEX(temp_limit_mutex);
-static u32 cpu_target_temp;
+static int cpu_target_temp;
 static bool temp_limit_4k;
 
 static int dvfs_get_rate_range(struct dvfs_node *clk_dvfs_node);
@@ -54,6 +55,9 @@ static int dvfs_get_temp(int chn)
 
 #if IS_ENABLED(CONFIG_ROCKCHIP_THERMAL)
 	int read_back = 0;
+
+	if (clk_cpu_dvfs_node)
+		return rockchip_tsadc_get_temp(chn, 0);
 
 	if (clk_cpu_bl_dvfs_node == NULL ||
 	    IS_ERR_OR_NULL(clk_cpu_bl_dvfs_node->vd->regulator))
@@ -219,6 +223,39 @@ static int sys_stat_notifier_call(struct notifier_block *nb,
 
 static struct notifier_block sys_stat_notifier = {
 		.notifier_call = sys_stat_notifier_call,
+};
+
+#define RK322XH_CPU_MIN_RATE_4K		816000000
+#define RK322XH_CPU_MAX_RATE_4K		816000000
+static int __cpuinit rk322xh_sys_stat_notifier_call(struct notifier_block *nb,
+					  unsigned long val, void *data)
+{
+	if (!clk_cpu_dvfs_node)
+		return NOTIFY_OK;
+
+	if (val & (SYS_STATUS_VIDEO_4K_10B | SYS_STATUS_VIDEO_4K)) {
+		if (temp_limit_4k)
+			return NOTIFY_OK;
+		temp_limit_4k = true;
+		clk_cpu_dvfs_node->min_rate = RK322XH_CPU_MIN_RATE_4K;
+		clk_cpu_dvfs_node->max_rate = RK322XH_CPU_MAX_RATE_4K;
+		cpu_down(3);
+		cpu_down(2);
+	} else {
+		if (!temp_limit_4k)
+			return NOTIFY_OK;
+		temp_limit_4k = false;
+		dvfs_get_rate_range(clk_cpu_dvfs_node);
+		cpu_up(2);
+		cpu_up(3);
+	}
+	dvfs_clk_set_rate(clk_cpu_dvfs_node,
+			  clk_cpu_dvfs_node->last_set_rate);
+	return NOTIFY_OK;
+}
+
+static struct notifier_block rk322xh_sys_stat_notifier __cpuinitdata = {
+	.notifier_call = rk322xh_sys_stat_notifier_call,
 };
 
 #define DVFS_REGULATOR_MODE_STANDBY	1
@@ -650,6 +687,9 @@ static int vd_regulator_round_volt_max(struct vd_node *vd, int volt)
 	int sel_volt;
 	int i;
 	
+	if (volt >= vd->volt_list[vd->n_voltages - 1])
+		return vd->volt_list[vd->n_voltages - 1];
+
 	for (i = 0; i < vd->n_voltages; i++) {
 		sel_volt = vd->volt_list[i];
 		if(sel_volt <= 0){	
@@ -669,6 +709,9 @@ static int vd_regulator_round_volt_min(struct vd_node *vd, int volt)
 	int sel_volt;
 	int i;
 	
+	if (volt >= vd->volt_list[vd->n_voltages - 1])
+		return vd->volt_list[vd->n_voltages - 1];
+
 	for (i = 0; i < vd->n_voltages; i++) {
 		sel_volt = vd->volt_list[i];
 		if(sel_volt <= 0){	
@@ -1103,8 +1146,6 @@ static int pvtm_set_single_dvfs(struct dvfs_node *dvfs_node, u32 idx,
 		}
 	}
 
-	return -EINVAL;
-
 	return 0;
 }
 
@@ -1119,7 +1160,7 @@ static void pvtm_set_dvfs_table(struct dvfs_node *dvfs_node)
 	unsigned int n_voltages = dvfs_node->vd->n_voltages;
 	int *volt_list = dvfs_node->vd->volt_list;
 
-	if (!info)
+	if (!info || !dvfs_node->pvtm_table)
 		return;
 
 	clk_set_rate(dvfs_node->clk, info->scan_rate_hz);
@@ -1335,6 +1376,11 @@ static void dvfs_temp_limit_normal(struct dvfs_node *dvfs_node, int temp)
 					dvfs_node->min_temp_limit)
 					dvfs_node->temp_limit_rate =
 					dvfs_node->min_temp_limit;
+				if (dvfs_node->max_temp_limit &&
+					(dvfs_node->temp_limit_rate >
+					dvfs_node->max_temp_limit))
+					dvfs_node->temp_limit_rate =
+					dvfs_node->max_temp_limit;
 				dvfs_clk_set_rate(dvfs_node,
 						  dvfs_node->last_set_rate);
 				dvfs_temp_limit_4k();
@@ -1391,6 +1437,15 @@ static void dvfs_temp_limit(struct dvfs_node *dvfs_node, int temp)
 		 temp, dvfs_node->temp_limit_rate);
 }
 
+static BLOCKING_NOTIFIER_HEAD(dvfs_notifier_list);
+void register_dvfs_notifier_callback(struct dvfs_node *dvfs_node,
+				     notifier_fn_t callback)
+{
+	dvfs_node->dvfs_nb.notifier_call = callback;
+	blocking_notifier_chain_register(&dvfs_notifier_list,
+					 &dvfs_node->dvfs_nb);
+}
+
 static void dvfs_temp_limit_work_func(struct work_struct *work)
 {
 	unsigned long delay = HZ/10;
@@ -1426,6 +1481,9 @@ static void dvfs_temp_limit_work_func(struct work_struct *work)
 		if (temp != INVALID_TEMP)
 			dvfs_temp_limit(clk_gpu_dvfs_node, temp);
 	}
+
+	blocking_notifier_call_chain(&dvfs_notifier_list, 0, NULL);
+
 	mutex_unlock(&temp_limit_mutex);
 }
 static DECLARE_DELAYED_WORK(dvfs_temp_limit_work, dvfs_temp_limit_work_func);
@@ -1614,7 +1672,7 @@ static int get_adjust_volt_by_leakage(struct dvfs_node *dvfs_node)
 	int i = 0;
 	int adjust_volt = 0;
 
-	if (!dvfs_node->vd)
+	if (!dvfs_node->vd || !dvfs_node->lkg_info.table)
 		return 0;
 
 	if (dvfs_node->lkg_info.def_table_lkg == -1)
@@ -1673,12 +1731,94 @@ static void adjust_table_by_leakage(struct dvfs_node *dvfs_node)
 	}
 }
 
+static int dvfs_update_vd_volt(struct dvfs_node *clk_dvfs_node, bool force)
+{
+	struct vd_node *vd;
+	int volt_new;
+	int volt_old;
+	int ret;
+
+	vd = clk_dvfs_node->vd;
+	if (vd->volt_init_enable_cnt == vd->volt_init_total_cnt || force) {
+		volt_new = dvfs_vd_get_newvolt_bypd(vd);
+		volt_old = vd->cur_volt;
+		if (volt_old != volt_new) {
+			ret = dvfs_scale_volt_direct(vd, volt_new);
+			if (ret < 0) {
+				clk_dvfs_node->enable_count = 0;
+				DVFS_ERR("dvfs enable clk %s,set volt error\n",
+					 clk_dvfs_node->name);
+				return -EAGAIN;
+			}
+		}
+		DVFS_LOG("dvfs vd %s fixed up setting: old %d new %d.\n",
+			 vd->name, volt_old, volt_new);
+
+	} else if (vd->volt_init_enable_cnt > vd->volt_init_total_cnt) {
+		DVFS_ERR("dvfs enable clks %d, total clks %d\n",
+			 vd->volt_init_enable_cnt, vd->volt_init_total_cnt);
+	}
+	return 0;
+}
+
+static int initialize_dvfs_node(struct dvfs_node *clk_dvfs_node)
+{
+	if (IS_ERR_OR_NULL(clk_dvfs_node->vd->regulator)) {
+		if (clk_dvfs_node->vd->regulator_name)
+			clk_dvfs_node->vd->regulator =
+			    dvfs_regulator_get(NULL,
+					       clk_dvfs_node->vd->
+					       regulator_name);
+		if (!IS_ERR_OR_NULL(clk_dvfs_node->vd->regulator)) {
+			DVFS_DBG("%s: vd(%s) get regulator(%s) ok\n",
+				 __func__, clk_dvfs_node->vd->name,
+				 clk_dvfs_node->vd->regulator_name);
+			clk_enable_dvfs_regulator_check(clk_dvfs_node->vd);
+			dvfs_get_vd_regulator_volt_list(clk_dvfs_node->vd);
+			dvfs_vd_get_regulator_volt_time_info(clk_dvfs_node->vd);
+		} else {
+			clk_dvfs_node->vd->regulator = NULL;
+			clk_dvfs_node->enable_count = 0;
+			DVFS_ERR("%s: vd(%s) can't get regulator(%s)!\n",
+				 __func__, clk_dvfs_node->vd->name,
+				 clk_dvfs_node->vd->regulator_name);
+			return -ENXIO;
+		}
+	} else {
+		clk_enable_dvfs_regulator_check(clk_dvfs_node->vd);
+	}
+
+	DVFS_DBG("%s: vd(%s) cur volt=%d\n",
+		 __func__, clk_dvfs_node->name, clk_dvfs_node->vd->cur_volt);
+
+	dvfs_table_round_clk_rate(clk_dvfs_node);
+	dvfs_get_rate_range(clk_dvfs_node);
+	clk_dvfs_node->freq_limit_en = 1;
+	clk_dvfs_node->max_limit_freq = clk_dvfs_node->max_rate;
+
+	if (clk_dvfs_node->lkg_adjust_volt_en)
+		adjust_table_by_leakage(clk_dvfs_node);
+	if (clk_dvfs_node->support_pvtm)
+		pvtm_set_dvfs_table(clk_dvfs_node);
+
+	dvfs_table_round_volt(clk_dvfs_node);
+	if (!clk_dvfs_node->skip_adjusting_volt)
+		clk_dvfs_node->vd->volt_init_enable_cnt++;
+
+	INIT_DELAYED_WORK(&clk_dvfs_node->dwork, dvfs_clk_boost_work_func);
+
+	clk_dvfs_node->is_initialized = true;
+
+	return 0;
+}
+
 int clk_enable_dvfs(struct dvfs_node *clk_dvfs_node)
 {
 	struct cpufreq_frequency_table clk_fv;
 	int volt_new;
 	unsigned int mode;
 	int ret;
+	bool dvfs_has_init = false;
 
 	if (!clk_dvfs_node)
 		return -EINVAL;
@@ -1693,43 +1833,19 @@ int clk_enable_dvfs(struct dvfs_node *clk_dvfs_node)
 	}
 	mutex_lock(&clk_dvfs_node->vd->mutex);
 	if (clk_dvfs_node->enable_count == 0) {
-		if (IS_ERR_OR_NULL(clk_dvfs_node->vd->regulator)) {
-			if (clk_dvfs_node->vd->regulator_name)
-				clk_dvfs_node->vd->regulator = dvfs_regulator_get(NULL, clk_dvfs_node->vd->regulator_name);
-			if (!IS_ERR_OR_NULL(clk_dvfs_node->vd->regulator)) {
-				DVFS_DBG("%s: vd(%s) get regulator(%s) ok\n",
-					__func__, clk_dvfs_node->vd->name, clk_dvfs_node->vd->regulator_name);
-				clk_enable_dvfs_regulator_check(clk_dvfs_node->vd);
-				dvfs_get_vd_regulator_volt_list(clk_dvfs_node->vd);
-				dvfs_vd_get_regulator_volt_time_info(clk_dvfs_node->vd);
-			} else {
-				clk_dvfs_node->vd->regulator = NULL;
-				clk_dvfs_node->enable_count = 0;
-				DVFS_ERR("%s: vd(%s) can't get regulator(%s)!\n", 
-					__func__, clk_dvfs_node->vd->name, clk_dvfs_node->vd->regulator_name);
+		if (!clk_dvfs_node->is_initialized) {
+			ret = initialize_dvfs_node(clk_dvfs_node);
+			if (ret) {
 				mutex_unlock(&clk_dvfs_node->vd->mutex);
-				return -ENXIO;
+				return ret;
 			}
 		} else {
-			clk_enable_dvfs_regulator_check(clk_dvfs_node->vd);
+			dvfs_has_init = true;
 		}
-		
-		DVFS_DBG("%s: vd(%s) cur volt=%d\n",
-			__func__, clk_dvfs_node->name, clk_dvfs_node->vd->cur_volt);
 
-		dvfs_table_round_clk_rate(clk_dvfs_node);
-		dvfs_get_rate_range(clk_dvfs_node);
-		clk_dvfs_node->freq_limit_en = 1;
-		clk_dvfs_node->max_limit_freq = clk_dvfs_node->max_rate;
-		if (clk_dvfs_node->lkg_adjust_volt_en)
-			adjust_table_by_leakage(clk_dvfs_node);
-		if (clk_dvfs_node->support_pvtm)
-			pvtm_set_dvfs_table(clk_dvfs_node);
-		dvfs_table_round_volt(clk_dvfs_node);
 		clk_dvfs_node->set_freq = clk_dvfs_node_get_rate_kz(clk_dvfs_node->clk);
 		clk_dvfs_node->last_set_rate = clk_dvfs_node->set_freq*1000;
-		INIT_DELAYED_WORK(&clk_dvfs_node->dwork,
-				  dvfs_clk_boost_work_func);
+
 		
 		DVFS_DBG("%s: %s get freq %u!\n", 
 			__func__, clk_dvfs_node->name, clk_dvfs_node->set_freq);
@@ -1759,19 +1875,7 @@ int clk_enable_dvfs(struct dvfs_node *clk_dvfs_node)
 			clk_notifier_register(clk, clk_dvfs_node->dvfs_nb);
 		}
 #endif
-		if(clk_dvfs_node->vd->cur_volt != volt_new) {
-			ret = dvfs_regulator_set_voltage_readback(clk_dvfs_node->vd->regulator, volt_new, volt_new);
-			dvfs_volt_up_delay(clk_dvfs_node->vd,volt_new, clk_dvfs_node->vd->cur_volt);
-			if (ret < 0) {
-				clk_dvfs_node->vd->volt_set_flag = DVFS_SET_VOLT_FAILURE;
-				clk_dvfs_node->enable_count = 0;
-				DVFS_ERR("dvfs enable clk %s,set volt error \n", clk_dvfs_node->name);
-				mutex_unlock(&clk_dvfs_node->vd->mutex);
-				return -EAGAIN;
-			}
-			clk_dvfs_node->vd->cur_volt = volt_new;
-			clk_dvfs_node->vd->volt_set_flag = DVFS_SET_VOLT_SUCCESS;
-		}
+		dvfs_update_vd_volt(clk_dvfs_node, dvfs_has_init);
 
 	} else {
 		DVFS_DBG("%s: dvfs already enable clk enable = %d!\n",
@@ -2114,6 +2218,8 @@ int rk_regist_vd(struct vd_node *vd)
 	vd->mode_flag=0;
 	vd->volt_time_flag=0;
 	vd->n_voltages=0;
+	vd->volt_init_total_cnt = 0;
+	vd->volt_init_enable_cnt = 0;
 	INIT_LIST_HEAD(&vd->pd_list);
 	mutex_lock(&rk_dvfs_mutex);
 	list_add(&vd->node, &rk_dvfs_tree);
@@ -2158,6 +2264,8 @@ int rk_regist_clk(struct dvfs_node *clk_dvfs_node)
 
 	mutex_lock(&vd->mutex);
 	list_add(&clk_dvfs_node->node, &pd->clk_list);
+	if (!clk_dvfs_node->skip_adjusting_volt)
+		vd->volt_init_total_cnt++;
 	mutex_unlock(&vd->mutex);
 	
 	return 0;
@@ -2185,6 +2293,9 @@ static struct cpufreq_frequency_table *of_get_temp_limit_table(struct device_nod
 
 	temp_limt_table = kzalloc(sizeof(struct cpufreq_frequency_table) *
 			     (nr/2 + 1), GFP_KERNEL);
+
+	if (!temp_limt_table)
+		return NULL;
 
 	val = prop->value;
 
@@ -2222,6 +2333,9 @@ static int of_get_dvfs_table(struct device_node *dev_node,
 
 	tmp_dvfs_table = kzalloc(sizeof(*tmp_dvfs_table) *
 			     (nr/2 + 1), GFP_KERNEL);
+	if (!tmp_dvfs_table)
+		return -ENOMEM;
+
 	val = prop->value;
 
 	for (i = 0; i < nr/2; i++) {
@@ -2265,6 +2379,8 @@ static int of_get_dvfs_pvtm_table(struct device_node *dev_node,
 
 	tmp_pvtm_table = kzalloc(sizeof(*tmp_pvtm_table) *
 			     (nr/3 + 1), GFP_KERNEL);
+	if (!tmp_dvfs_table || !tmp_pvtm_table)
+		return -ENOMEM;
 
 	val = prop->value;
 
@@ -2313,6 +2429,9 @@ static struct lkg_adjust_volt_table
 		kzalloc(sizeof(struct lkg_adjust_volt_table) *
 		(nr/2 + 1), GFP_KERNEL);
 
+	if (!lkg_adjust_volt_table)
+		return NULL;
+
 	val = prop->value;
 
 	for (i = 0; i < nr/2; i++) {
@@ -2332,6 +2451,9 @@ static int dvfs_node_parse_dt(struct device_node *np,
 	int process_version = rockchip_process_version();
 	int i = 0;
 	int ret;
+
+	of_property_read_u32_index(np, "skip_adjusting_volt", 0,
+				   &dvfs_node->skip_adjusting_volt);
 
 	of_property_read_u32_index(np, "channel", 0, &dvfs_node->channel);
 
@@ -2353,6 +2475,9 @@ static int dvfs_node_parse_dt(struct device_node *np,
 		of_property_read_u32_index(np, "min_temp_limit",
 					   0, &dvfs_node->min_temp_limit);
 		dvfs_node->min_temp_limit *= 1000;
+		of_property_read_u32_index(np, "max_temp_limit",
+					   0, &dvfs_node->max_temp_limit);
+		dvfs_node->max_temp_limit *= 1000;
 		of_property_read_u32_index(np, "target-temp",
 					   0, &dvfs_node->target_temp);
 		pr_info("target-temp:%d\n", dvfs_node->target_temp);
@@ -2433,7 +2558,7 @@ static int dvfs_node_parse_dt(struct device_node *np,
 	return 0;
 }
 
-int of_dvfs_init(void)
+int __init of_dvfs_init(void)
 {
 	struct vd_node *vd;
 	struct pd_node *pd;
@@ -2450,6 +2575,9 @@ int of_dvfs_init(void)
 		DVFS_ERR("%s get dvfs dev node err\n", __func__);
 		return PTR_ERR(dvfs_dev_node);
 	}
+
+	if (of_device_is_compatible(dvfs_dev_node, "rockchip,rk322xh-dvfs"))
+		rockchip_register_system_status_notifier(&rk322xh_sys_stat_notifier);
 
 	for_each_available_child_of_node(dvfs_dev_node, vd_dev_node) {
 		vd = kzalloc(sizeof(struct vd_node), GFP_KERNEL);

@@ -20,6 +20,14 @@
 
 #define PLTFRM_CAMERA_MODULE_REG_TYPE_DATA 0
 #define PLTFRM_CAMERA_MODULE_REG_TYPE_TIMEOUT 1
+#define PLTFRM_CAMERA_MODULE_REG_TYPE_DATA_SINGLE 2
+
+#define PLTFRM_CAMERA_MODULE_MIRROR_BIT 0
+#define PLTFRM_CAMERA_MODULE_FLIP_BIT 1
+#define PLTFRM_CAMERA_MODULE_IS_MIRROR(a) \
+	((a & PLTFRM_CAMERA_MODULE_MIRROR_BIT) == PLTFRM_CAMERA_MODULE_MIRROR_BIT)
+#define PLTFRM_CAMERA_MODULE_IS_FLIP(a) \
+	((a & PLTFRM_CAMERA_MODULE_FLIP_BIT) == PLTFRM_CAMERA_MODULE_FLIP_BIT)
 
 extern const char *PLTFRM_CAMERA_MODULE_PIN_PD;
 extern const char *PLTFRM_CAMERA_MODULE_PIN_PWR;
@@ -67,6 +75,9 @@ int pltfrm_camera_module_patch_config(
 	struct v4l2_subdev_frame_interval *frm_intrvl);
 
 struct v4l2_subdev *pltfrm_camera_module_get_af_ctrl(
+	struct v4l2_subdev *sd);
+
+struct v4l2_subdev *pltfrm_camera_module_get_ircut_ctrl(
 	struct v4l2_subdev *sd);
 
 struct v4l2_subdev *pltfrm_camera_module_get_fl_ctrl(

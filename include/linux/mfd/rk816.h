@@ -14,6 +14,7 @@
 #ifndef __LINUX_REGULATOR_rk816_H
 #define __LINUX_REGULATOR_rk816_H
 
+#include <linux/gpio.h>
 #include <linux/regulator/machine.h>
 #include <linux/wakelock.h>
 #include <linux/power_supply.h>
@@ -42,6 +43,9 @@
 #define RK805_SLP_DCDC_EN_REG			0x25
 #define RK805_SLP_LDO_EN_REG			0x26
 #define RK805_LDO_EN_REG			0x27
+
+/*CONFIG REGISTER*/
+#define RK805_THERMAL_REG			0x22
 
 /*BUCK AND LDO CONFIG REGISTER*/
 #define RK805_BUCK_LDO_SLP_LP_EN_REG		0x2A
@@ -267,9 +271,9 @@
 #define RK816_REBOOT_CNT_REG			0xEC
 #define RK816_PCB_IOFFSET_REG			0xED
 #define RK816_MISC_MARK_REG			0xEE
-#define DATA15_REG				0xEF
-#define DATA16_REG				0xF0
-#define DATA17_REG				0xF1
+#define RK816_HALT_CNT_REG			0xEF
+#define RK816_CALC_REST_REGH			0xF0
+#define RK816_CALC_REST_REGL			0xF1
 #define DATA18_REG				0xF2
 
 /* IRQ Definitions */
@@ -340,6 +344,8 @@
 #define VB_LOW_IRQ_MSK				(1 << 1)
 #define REG_WRITE_MSK				0xff
 #define TEMP105C				0x08
+#define TEMP115C				0x0c
+#define TEMP_HOTDIE_MSK				0x0c
 #define BUCK4_MAX_ILIMIT			0x2c
 #define BUCK_RATE_MSK				(0x3 << 3)
 #define BUCK_RATE_12_5MV_US			(0x2 << 3)
@@ -420,6 +426,18 @@ struct rk8xx_regulator_data {
 	u8 num_regulators;
 	const struct regulator_desc *reg_desc;
 	struct of_regulator_match *reg_matches;
+};
+
+struct rk8xx_gpio_reg {
+	u8 reg;
+	u8 dir_msk;
+	u8 val_msk;
+	u8 fun_msk;
+};
+
+struct rk8xx_gpio_data {
+	int ngpio;
+	struct rk8xx_gpio_reg *gpio_reg;
 };
 
 struct rk8xx_reg_data {

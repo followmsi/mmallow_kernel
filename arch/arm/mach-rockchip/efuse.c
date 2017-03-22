@@ -32,6 +32,16 @@
 #endif
 #endif
 
+struct efuse_info {
+	u32 flag;
+	u32 len;
+	u32 reserved[6];
+	char data[];
+};
+
+#define EFUSE_INFO_ADDRESS	(0x10f000)
+#define EFUSE_VALID_FLAG	(0x524f434b) /* ROCK */
+
 #define FRAC_BITS 10
 #define int_to_frac(x) ((x) << FRAC_BITS)
 #define frac_to_int(x) ((x) >> FRAC_BITS)
@@ -186,39 +196,25 @@ static void efuse_writel(u32 val, u32 offset)
 	secure_regs_wr_32(efuse_phys + offset, val);
 }
 
-#define RKTF_VER_MAJOR(ver) (((ver) >> 16) & 0xffff)
-#define RKTF_VER_MINOR(ver) ((ver) & 0xffff)
-/* valid ver */
-#define RKTF_VLDVER_MAJOR (1)
-#define RKTF_VLDVER_MINOR (3)
-
-
-static int __init rockchip_tf_ver_check(void)
+static int __init rockchip_copy_efuse(void)
 {
-	u64 val;
-	u32 ver_val;
+	struct efuse_info __iomem *efuse_info;
+	u32 length = sizeof(efuse_buf);
 
-	ver_val = reg_rd_fn(PSCI_SIP_RKTF_VER, 0, 0, 0, &val);
-	if (ver_val == 0xffffffff)
-		goto ver_error;
+	efuse_info = ioremap(EFUSE_INFO_ADDRESS, SZ_4K);
+	if (!IS_ERR_OR_NULL(efuse_info)) {
+		if (efuse_info->flag == EFUSE_VALID_FLAG) {
+			length = min(length, efuse_info->len);
+			memcpy(efuse_buf, efuse_info->data, length);
+			iounmap(efuse_info);
+			return 0;
+		}
+		iounmap(efuse_info);
+		return -EINVAL;
+	}
 
-	if ((RKTF_VER_MAJOR(ver_val) >= RKTF_VLDVER_MAJOR) &&
-		(RKTF_VER_MINOR(ver_val) >= RKTF_VLDVER_MINOR))
-		return 0;
-
-ver_error:
-
-	pr_err("read tf version 0x%x!\n", ver_val);
-
-	do {
-		mdelay(1000);
-		pr_err("trusted firmware need to update to(%d.%d) or is invaild!\n",
-			RKTF_VLDVER_MAJOR, RKTF_VLDVER_MINOR);
-	} while(1);
-
-	return 0;
+	return -ENOMEM;
 }
-device_initcall_sync(rockchip_tf_ver_check);
 #endif
 
 static int rk3288_efuse_readregs(u32 addr, u32 length, u8 *buf)
@@ -349,6 +345,11 @@ int rockchip_get_leakage(int ch)
 			return efuse_buf[23+ch];
 	}
 	return 0;
+}
+
+int rockchip_get_hdmi_flag(void)
+{
+	return efuse_buf[29] & 2;
 }
 
 int rockchip_get_cvbs_adjust(void)
@@ -488,7 +489,7 @@ void __init rockchip_efuse_init(void)
 {
 	int ret;
 
-	if (cpu_is_rk3288() || cpu_is_rk322x()) {
+	if (cpu_is_rk3288() || cpu_is_rk322x() || cpu_is_rv1108()) {
 		rk3288_efuse_init();
 	} else if (cpu_is_rk312x()) {
 		ret = rk312x_efuse_readregs(0, 32, efuse_buf);
@@ -504,6 +505,19 @@ static int __init rockchip_efuse_probe(struct platform_device *pdev)
 {
 	struct resource *regs;
 
+	if (of_device_is_compatible(pdev->dev.of_node,
+				    "rockchip,rk322xh-efuse-256")) {
+		rockchip_copy_efuse();
+
+		efuse.get_leakage = rk3288_get_leakage;
+		efuse.efuse_version = rk3288_get_efuse_version();
+		efuse.process_version = rk3288_get_process_version();
+		rockchip_set_cpu_version((efuse_buf[6] >> 4) & 3);
+		rk3288_set_system_serial();
+
+		return 0;
+	}
+
 	regs = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	if (!regs) {
 		dev_err(&pdev->dev, "failed to get I/O memory\n");
@@ -517,6 +531,7 @@ static int __init rockchip_efuse_probe(struct platform_device *pdev)
 
 static const struct of_device_id rockchip_efuse_of_match[] = {
 	{ .compatible = "rockchip,rk3368-efuse-256", .data = NULL, },
+	{ .compatible = "rockchip,rk322xh-efuse-256", .data = NULL, },
 	{},
 };
 

@@ -2,7 +2,6 @@
 # Makefile for misc devices that really don't fit anywhere else.
 #
 
-obj-$(CONFIG_GEEKBOX_FAN) += geekbox-fan.o
 obj-$(CONFIG_IBM_ASM)		+= ibmasm/
 obj-$(CONFIG_AD525X_DPOT)	+= ad525x_dpot.o
 obj-$(CONFIG_AD525X_DPOT_I2C)	+= ad525x_dpot-i2c.o
@@ -20,6 +19,8 @@ obj-$(CONFIG_LKDTM)		+= lkdtm.o
 obj-$(CONFIG_TIFM_CORE)       	+= tifm_core.o
 obj-$(CONFIG_TIFM_7XX1)       	+= tifm_7xx1.o
 obj-$(CONFIG_PHANTOM)		+= phantom.o
+obj-$(CONFIG_RK_DEVICEINFO)	+= rockchip_deviceinfo.o
+obj-$(CONFIG_RESUME_REBOOT)	+= resume_reboot.o
 obj-$(CONFIG_SENSORS_BH1780)	+= bh1780gli.o
 obj-$(CONFIG_SENSORS_BH1770)	+= bh1770glc.o
 obj-$(CONFIG_SENSORS_APDS990X)	+= apds990x.o
@@ -62,3 +63,4 @@ obj-$(CONFIG_5V_EN)	+= 5v_en.o
 obj-$(CONFIG_ROCKCHIP_SCR) += rk_scr.o
 obj-$(CONFIG_GPIO_DET)		+= gpio-detection.o
 obj-$(CONFIG_ONBOARD_MODEM) += rk_modem_control.o
+obj-$(CONFIG_MOTOR_GPIO) += motor-gpio.o

@@ -5,8 +5,9 @@ The device node has following properties.
 
 DWC_OTG OTG20
 Required properties:
- - compatible : Should be "rockchip,rk3188_usb20_otg" or
-   "rockchip,rk3288_usb20_otg" and so on, depending upon the SoC.
+ - compatible : Should be "rockchip,rk3188_usb20_otg"
+   "rockchip,rk3288_usb20_otg" or "rockchip,rk322xh_usb20_otg"
+   and so on, depending upon the SoC.
  - reg : Physical base address of the controller and
    length of memory mapped region.
  - interrupts : interrupt number to the cpu.
@@ -57,9 +58,10 @@ Example:
 
 EHCI
 Required properties:
- - compatible : Should be "rockchip,rk3188_rk_ehci_host" or
-   "rockchip,rk3288_rk_ehci_host" and so on, for USB 2.0 EHCI
-   controller in host mode, depending upon the SoC.
+ - compatible : Should be "rockchip,rk3188_rk_ehci_host"
+   "generic-ehci" or "rockchip,rk3288_rk_ehci_host" and so on,
+   for USB 2.0 EHCI controller in host mode, depending upon
+   the SoC.
  - reg : Physical base address of the controller and
    length of memory mapped region.
  - interrupts : Interrupt number to the cpu.
@@ -80,9 +82,10 @@ Example:
 
 OHCI
 Required properties:
- - compatible : Should be "rockchip,rk3188_rk_ohci_host" or
-   "rockchip,rk3288_rk_ohci_host" and so on, for USB 2.0 OHCI
-   companion controller in host mode, depending upon the SoC.
+ - compatible : Should be "rockchip,rk3188_rk_ohci_host"
+   "generic-ohci" or "rockchip,rk3288_rk_ohci_host" and so on,
+   for USB 2.0 OHCI companion controller in host mode,
+   depending upon the SoC.
  - reg : Physical base address of the controller and
    length of memory mapped region.
  - interrupts : Interrupt number to the cpu.
@@ -132,8 +135,8 @@ Example:
 ROCKCHIP USB-PHY CONTROL
 Required properties:
  - compatible : Should be "rockchip,rk3188-dwc-control-usb"
-   or "rockchip,rk3288-dwc-control-usb" and so on, depending
-   upon the SoC.
+   "rockchip,rk3288-dwc-control-usb" or "rockchip,rk322xh-dwc-control-usb"
+   and so on, depending upon the SoC.
  - reg : Physical base address of USB-PHY GRF registers.
    It contains the address of "GRF_SOC_STATUSX" and
    "GRF_UOCX_BASE" depending upon the number of usb controllers

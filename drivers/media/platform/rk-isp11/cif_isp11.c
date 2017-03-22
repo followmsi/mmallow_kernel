@@ -20,6 +20,7 @@
 #include "cif_isp11.h"
 #include <linux/pm_runtime.h>
 #include <linux/vmalloc.h>
+#include <linux/rockchip/common.h>
 
 static int cif_isp11_mipi_isr(
 	unsigned int mis,
@@ -240,7 +241,7 @@ static struct cif_isp11_fmt cif_isp11_output_format[] = {
 	.rotation = false,
 	.overlay = false,
 },
-/* ************* YUV400 ************* */
+/* ************* YUV400/Y8 ************* */
 {
 	.name		= "YVU400-Grey-Planar",
 	.fourcc	= V4L2_PIX_FMT_GREY,
@@ -281,6 +282,15 @@ static struct cif_isp11_fmt cif_isp11_output_format[] = {
 	.fourcc = V4L2_PIX_FMT_RGB565,
 	.flags  = 0,
 	.depth  = 16,
+	.rotation = false,
+	.overlay = false,
+},
+/* ************ Y10*********** */
+{
+	.name		= "Y10",
+	.fourcc = V4L2_PIX_FMT_Y10,
+	.flags	= 0,
+	.depth	= 10,
 	.rotation = false,
 	.overlay = false,
 },
@@ -673,6 +683,8 @@ static const char *cif_isp11_pix_fmt_string(int pixfmt)
 		return "DATA";
 	case CIF_JPEG:
 		return "JPEG";
+	case CIF_Y10:
+		return "Y10";
 	case CIF_Y12:
 		return "Y12";
 	case CIF_Y12_420SP:
@@ -1564,14 +1576,21 @@ static int cif_isp11_config_img_src(
 	ret = (int)cif_isp11_img_src_ioctl(dev->img_src,
 		RK_VIDIOC_SENSOR_MODE_DATA, &sensor_mode);
 	if (IS_ERR_VALUE(ret)) {
-		dev->img_src_exps.exp_valid_frms = 2;
+		dev->img_src_exps.exp_valid_frms[VALID_FR_EXP_T_INDEX] = 4;
+		dev->img_src_exps.exp_valid_frms[VALID_FR_EXP_G_INDEX] = 4;
 	} else {
-		if ((sensor_mode.exposure_valid_frame < 2) ||
-			(sensor_mode.exposure_valid_frame > 6))
-			dev->img_src_exps.exp_valid_frms = 2;
+		if ((sensor_mode.exposure_valid_frame[VALID_FR_EXP_T_INDEX] < 2) ||
+			(sensor_mode.exposure_valid_frame[VALID_FR_EXP_T_INDEX] > 6))
+			dev->img_src_exps.exp_valid_frms[VALID_FR_EXP_T_INDEX] = 4;
 		else
-			dev->img_src_exps.exp_valid_frms =
-				sensor_mode.exposure_valid_frame;
+			dev->img_src_exps.exp_valid_frms[VALID_FR_EXP_T_INDEX] =
+				sensor_mode.exposure_valid_frame[VALID_FR_EXP_T_INDEX];
+		if ((sensor_mode.exposure_valid_frame[VALID_FR_EXP_G_INDEX] < 2) ||
+			(sensor_mode.exposure_valid_frame[VALID_FR_EXP_G_INDEX] > 6))
+			dev->img_src_exps.exp_valid_frms[VALID_FR_EXP_G_INDEX] = 2;
+		else
+			dev->img_src_exps.exp_valid_frms[VALID_FR_EXP_G_INDEX] =
+				sensor_mode.exposure_valid_frame[VALID_FR_EXP_G_INDEX];
 	}
 	cif_isp11_pltfrm_pr_dbg(dev->dev,
 		"cam_itf: (type: 0x%x, dphy: %d, vc: %d, nb_lanes: %d, bitrate: %d)",
@@ -2042,6 +2061,10 @@ static int cif_isp11_config_mipi(
 	/* Enable MIPI interrupts */
 	cif_iowrite32(~0,
 		dev->config.base_addr + CIF_MIPI_ICR);
+	/*
+	*  Disable CIF_MIPI_ERR_DPHY interrupt here temporary for
+	*isp bus may be dead when switch isp.
+	*/
 	cif_iowrite32(
 		CIF_MIPI_FRAME_END |
 		CIF_MIPI_ERR_CSI |
@@ -4383,12 +4406,12 @@ static int cif_isp11_mi_frame_end(
 		 * buffer, the last buffer isn't been release to user
 		 * until new buffer queue;
 		 */
-		if ((stream->curr_buf != NULL) &&
-			(stream->next_buf != NULL)) {
+		if (stream->curr_buf != NULL) {
 			bool wake_now;
 
 			stream->curr_buf->field_count = dev->isp_dev.frame_id;
-			stream->curr_buf->state = VIDEOBUF_DONE;
+			if (stream->next_buf != NULL)
+				stream->curr_buf->state = VIDEOBUF_DONE;
 			wake_now = false;
 
 			if (stream->metadata.d && dev->isp_dev.streamon) {
@@ -4414,7 +4437,10 @@ static int cif_isp11_mi_frame_end(
 						&dev->isp_dev;
 					work->frame_id =
 						dev->isp_dev.frame_id;
-					work->vb = stream->curr_buf;
+					if (stream->next_buf != NULL)
+						work->vb = stream->curr_buf;
+					else
+						work->vb = NULL;
 					work->stream_id = 	stream->id;
 					if (!queue_work(dev->isp_dev.readout_wq,
 						(struct work_struct *)work)) {
@@ -4432,12 +4458,14 @@ static int cif_isp11_mi_frame_end(
 				wake_now = true;
 			}
 
-			if (wake_now) {
-				cif_isp11_pltfrm_pr_dbg(NULL,
-					"frame done\n");
-				wake_up(&stream->curr_buf->done);
+			if (stream->next_buf != NULL) {
+				if (wake_now) {
+					cif_isp11_pltfrm_pr_dbg(NULL,
+						"frame done\n");
+					wake_up(&stream->curr_buf->done);
+				}
+				stream->curr_buf = NULL;
 			}
-			stream->curr_buf = NULL;
 		}
 
 		if (stream->curr_buf == NULL) {
@@ -4578,13 +4606,14 @@ static void cif_isp11_start_mi(
 	}
 
 	/*
-	 *   New mi register update mode is invalidate in raw/jpeg for rk1108,
-	 * All path used old mode for rk1108;
+	 *   New mi register update mode is invalidate in raw/jpeg for rv1108,
+	 * All path used old mode for rv1108;
 	 */
 	cif_iowrite32AND_verify(~CIF_MI_INIT_UPDATE_MODE_NEW,
 		dev->config.base_addr + CIF_MI_INIT, ~0);
 	cif_iowrite32OR(CIF_MI_INIT_SOFT_UPD,
 		dev->config.base_addr + CIF_MI_INIT);
+
 	cif_isp11_pltfrm_pr_dbg(NULL,
 		"CIF_MI_INIT_SOFT_UPD\n");
 
@@ -4819,6 +4848,8 @@ static int cif_isp11_stop(
 	bool stop_y12)
 {
 	unsigned long flags = 0;
+	bool stop_all;
+	int timeout;
 
 	cif_isp11_pltfrm_pr_dbg(dev->dev,
 		"SP state = %s, MP state = %s, Y12 state = %s, img_src state = %s, stop_sp = %d, stop_mp = %d, stop_y12 = %d\n",
@@ -4839,14 +4870,27 @@ static int cif_isp11_stop(
 		return 0;
 	}
 
-	if ((stop_mp && stop_sp && stop_y12) ||
+	stop_all = ((stop_mp && stop_sp && stop_y12) ||
 		(stop_sp &&
-		(dev->mp_stream.state != CIF_ISP11_STATE_STREAMING)) ||
+		(dev->mp_stream.state != CIF_ISP11_STATE_STREAMING) &&
+		(dev->y12_stream.state != CIF_ISP11_STATE_STREAMING)) ||
 		(stop_mp &&
-		(dev->sp_stream.state != CIF_ISP11_STATE_STREAMING)) ||
+		(dev->sp_stream.state != CIF_ISP11_STATE_STREAMING) &&
+		(dev->y12_stream.state != CIF_ISP11_STATE_STREAMING)) ||
 		(stop_y12 &&
-		(dev->y12_stream.state != CIF_ISP11_STATE_STREAMING))) {
+		(dev->mp_stream.state != CIF_ISP11_STATE_STREAMING) &&
+		(dev->sp_stream.state != CIF_ISP11_STATE_STREAMING)));
 
+	if (stop_all) {
+		/*
+		*Modify ISP stop sequence for isp bus dead:
+		*ISP(mi) stop in mi frame end -> Stop ISP(mipi) ->
+		*Stop ISP(isp) ->wait for ISP isp off
+		*/
+
+		cif_isp11_stop_y12(dev);
+		cif_isp11_stop_mp(dev);
+		cif_isp11_stop_sp(dev);
 		cif_isp11_stop_dma(dev);
 
 		local_irq_save(flags);
@@ -4863,15 +4907,19 @@ static int cif_isp11_stop(
 
 		cif_iowrite32AND(~CIF_MIPI_CTRL_OUTPUT_ENA,
 			dev->config.base_addr + CIF_MIPI_CTRL);
-
-		/* stop MI, MIPI, and ISP */
+		/* stop ISP */
 		cif_iowrite32AND(~(CIF_ISP_CTRL_ISP_INFORM_ENABLE |
 			CIF_ISP_CTRL_ISP_ENABLE),
 			dev->config.base_addr + CIF_ISP_CTRL);
 		cif_iowrite32OR(CIF_ISP_CTRL_ISP_CFG_UPD,
 			dev->config.base_addr + CIF_ISP_CTRL);
 
-		cif_isp11_stop_mi(dev, stop_sp, stop_mp, stop_y12);
+		timeout = 100;
+		while ((timeout-- > 0) &&
+			((cif_ioread32(dev->config.base_addr + CIF_ISP_RIS) & CIF_ISP_OFF)
+			!= CIF_ISP_OFF)) {
+			msleep(1);
+		};
 		local_irq_restore(flags);
 
 		if (!CIF_ISP11_INP_IS_DMA(dev->config.input_sel)) {
@@ -5084,7 +5132,6 @@ static int cif_isp11_start(
 		dev->dma_stream.stop = false;
 		cif_isp11_dma_next_buff(dev);
 	}
-
 	cif_isp11_pltfrm_pr_dbg(dev->dev,
 		"SP state = %s, MP state = %s, Y12 state = %s, DMA state = %s, img_src state = %s\n"
 		"  MI_CTRL 0x%08x\n"
@@ -5359,6 +5406,8 @@ static int cif_isp11_mi_isr(unsigned int mi_mis, void *cntxt)
 			spin_lock(&dev->vbq_lock);
 			(void)cif_isp11_mi_frame_end(dev,
 				CIF_ISP11_STREAM_MP);
+			if (ddr_freq_scale_send_event)
+				ddr_freq_scale_send_event(ISP_FE_EVENT, 0);
 			spin_unlock(&dev->vbq_lock);
 		}
 		if (dev->y12_stream.state == CIF_ISP11_STATE_STREAMING) {
@@ -5447,12 +5496,14 @@ static void cif_isp11_vs_work(struct work_struct *work)
 	struct cif_isp11_isp_vs_work *vs_wk =
 		container_of(work, struct cif_isp11_isp_vs_work, work);
 	struct cif_isp11_device *dev = vs_wk->dev;
+	unsigned int v_frame_id;
+
 
 	switch (vs_wk->cmd) {
 	case CIF_ISP11_VS_EXP: {
 		struct cif_isp11_img_src_exp *exp =
 			(struct cif_isp11_img_src_exp *)vs_wk->param;
-		struct cif_isp11_img_src_ext_ctrl *exp_ctrl = exp->exp;
+		struct cif_isp11_img_src_ext_ctrl *exp_ctrl = &exp->exp;
 		struct cif_isp11_img_src_data *new_data;
 
 		if (dev->img_src != NULL)
@@ -5467,8 +5518,19 @@ static void cif_isp11_vs_work(struct work_struct *work)
 			new_data = &dev->img_src_exps.data[1];
 
 		mutex_lock(&dev->img_src_exps.mutex);
-		new_data->v_frame_id = dev->isp_dev.frame_id +
-			dev->img_src_exps.exp_valid_frms;
+		if (exp_ctrl->ctrls->id == V4L2_CID_EXPOSURE)
+			v_frame_id = dev->isp_dev.frame_id +
+				dev->img_src_exps.exp_valid_frms[VALID_FR_EXP_T_INDEX];
+		else
+			v_frame_id = dev->isp_dev.frame_id +
+				dev->img_src_exps.exp_valid_frms[VALID_FR_EXP_G_INDEX];
+
+		if (v_frame_id == dev->img_src_exps.data[0].v_frame_id)
+			new_data = &dev->img_src_exps.data[0];
+		if (v_frame_id == dev->img_src_exps.data[1].v_frame_id)
+			new_data = &dev->img_src_exps.data[1];
+		new_data->v_frame_id = v_frame_id;
+
 		cif_isp11_img_src_ioctl(dev->img_src,
 			RK_VIDIOC_SENSOR_MODE_DATA,
 			&new_data->data);
@@ -5481,10 +5543,8 @@ static void cif_isp11_vs_work(struct work_struct *work)
 			dev->isp_dev.frame_id,
 			new_data->v_frame_id);*/
 
-		kfree(exp->exp->ctrls);
-		exp->exp->ctrls = NULL;
-		kfree(exp->exp);
-		exp->exp = NULL;
+		kfree(exp->exp.ctrls);
+		exp->exp.ctrls = NULL;
 		kfree(exp);
 		exp = NULL;
 		break;
@@ -5495,6 +5555,38 @@ static void cif_isp11_vs_work(struct work_struct *work)
 
 	kfree(vs_wk);
 	vs_wk = NULL;
+}
+
+static int cif_isp11_vs_work_cmd(
+	struct cif_isp11_device *dev,
+	enum cif_isp11_isp_vs_cmd cmd,
+	void *para)
+{
+	struct cif_isp11_isp_vs_work *vs_wk;
+
+	if (cmd == CIF_ISP11_VS_EXP)
+		vs_wk = kmalloc(sizeof(struct cif_isp11_isp_vs_work),
+			GFP_ATOMIC);
+	else
+		vs_wk = kmalloc(sizeof(struct cif_isp11_isp_vs_work),
+			GFP_KERNEL);
+
+	if (vs_wk) {
+		vs_wk->cmd = cmd;
+		vs_wk->dev = dev;
+		vs_wk->param = (void *)para;
+		INIT_WORK((struct work_struct *)&vs_wk->work,
+			cif_isp11_vs_work);
+		if (!queue_work(dev->vs_wq,
+			(struct work_struct *)&vs_wk->work)) {
+			cif_isp11_pltfrm_pr_err(dev->dev,
+				"%s: queue work failed\n", __func__);
+			kfree(vs_wk);
+		}
+		return 0;
+	} else {
+		return -ENOMEM;
+	}
 }
 /**Public Functions***********************************************************/
 void cif_isp11_sensor_mode_data_sync(
@@ -5711,6 +5803,7 @@ int cif_isp11_streamoff(
 	bool streamoff_dma = stream_ids & CIF_ISP11_STREAM_DMA;
 	bool streamoff_y12 = stream_ids & CIF_ISP11_STREAM_Y12;
 	unsigned int streamoff_all = 0;
+	unsigned long lock_flags;
 
 	cif_isp11_pltfrm_pr_dbg(dev->dev,
 		"SP state = %s, MP state = %s, DMA state = %s, Y12 state = %s,"
@@ -5757,8 +5850,20 @@ int cif_isp11_streamoff(
 	if (streamoff_all ==
 		(CIF_ISP11_STREAM_MP |
 		CIF_ISP11_STREAM_SP |
-		CIF_ISP11_STREAM_Y12))
+		CIF_ISP11_STREAM_Y12)) {
+		struct cif_isp11_img_src_exp *exp;
+		spin_lock_irqsave(&dev->img_src_exps.lock, lock_flags);
+		if (!list_empty(&dev->img_src_exps.list)) {
+			exp = list_first_entry(&dev->img_src_exps.list,
+				struct cif_isp11_img_src_exp,
+				list);
+			list_del(&exp->list);
+			kfree(exp->exp.ctrls);
+			kfree(exp);
+		}
+		spin_unlock_irqrestore(&dev->img_src_exps.lock, lock_flags);
 		drain_workqueue(dev->vs_wq);
+	}
 
 	ret = cif_isp11_stop(dev, streamoff_sp, streamoff_mp, streamoff_y12);
 	if (IS_ERR_VALUE(ret))
@@ -6130,7 +6235,8 @@ struct cif_isp11_device *cif_isp11_create(
 	cif_isp11_pltfrm_event_init(dev->dev, &dev->mp_stream.done);
 	cif_isp11_pltfrm_event_init(dev->dev, &dev->y12_stream.done);
 
-	dev->img_src_exps.exp_valid_frms = 2;
+	dev->img_src_exps.exp_valid_frms[VALID_FR_EXP_T_INDEX] = 4;
+	dev->img_src_exps.exp_valid_frms[VALID_FR_EXP_G_INDEX] = 4;
 	mutex_init(&dev->img_src_exps.mutex);
 	memset(&dev->img_src_exps.data, 0x00, sizeof(dev->img_src_exps.data));
 	spin_lock_init(&dev->img_src_exps.lock);
@@ -6295,25 +6401,83 @@ int cif_isp11_s_exp(
 	struct cif_isp11_device *dev,
 	struct cif_isp11_img_src_ext_ctrl *exp_ctrl)
 {
-	struct cif_isp11_img_src_exp *exp;
+	struct cif_isp11_img_src_ctrl  *ctrl_exp_t = NULL, *ctrl_exp_g = NULL;
+	struct cif_isp11_img_src_exp *exp = NULL, *exp_t = NULL, *exp_g = NULL;
 	unsigned long lock_flags;
-	int retval;
+	int retval, i;
 
 	if (!dev->vs_wq)
 		return -ENODEV;
 
-	exp = kmalloc(sizeof(struct cif_isp11_img_src_exp), GFP_KERNEL);
-	if (!exp) {
-		retval = -ENOMEM;
-		goto failed;
+	if (dev->img_src_exps.exp_valid_frms[VALID_FR_EXP_T_INDEX] ==
+		dev->img_src_exps.exp_valid_frms[VALID_FR_EXP_G_INDEX]) {
+		exp = kmalloc(sizeof(struct cif_isp11_img_src_exp), GFP_KERNEL);
+		if (!exp) {
+			retval = -ENOMEM;
+			goto failed;
+		}
+		exp->exp = *exp_ctrl;
+
+		spin_lock_irqsave(&dev->img_src_exps.lock, lock_flags);
+		list_add_tail(&exp->list, &dev->img_src_exps.list);
+		spin_unlock_irqrestore(&dev->img_src_exps.lock, lock_flags);
+	} else {
+		exp_t = kmalloc(sizeof(struct cif_isp11_img_src_exp), GFP_KERNEL);
+		if (!exp_t) {
+			retval = -ENOMEM;
+			goto failed;
+		}
+		ctrl_exp_t = kmalloc(sizeof(struct cif_isp11_img_src_ctrl), GFP_KERNEL);
+		if (!ctrl_exp_t) {
+			retval = -ENOMEM;
+			goto failed;
+		}
+
+		exp_g = kmalloc(sizeof(struct cif_isp11_img_src_exp), GFP_KERNEL);
+		if (!exp_g) {
+			retval = -ENOMEM;
+			goto failed;
+		}
+		ctrl_exp_g = kmalloc(sizeof(struct cif_isp11_img_src_ctrl)*2, GFP_KERNEL);
+		if (!ctrl_exp_g) {
+			retval = -ENOMEM;
+			goto failed;
+		}
+
+		for (i = 0; i < exp_ctrl->cnt; i++) {
+			if (exp_ctrl->ctrls[i].id == V4L2_CID_EXPOSURE) {
+				*ctrl_exp_t = exp_ctrl->ctrls[i];
+			}
+			if (exp_ctrl->ctrls[i].id == V4L2_CID_GAIN) {
+				*ctrl_exp_g = exp_ctrl->ctrls[i];
+			}
+			if (exp_ctrl->ctrls[i].id == RK_V4L2_CID_GAIN_PERCENT) {
+				*(ctrl_exp_g+1) = exp_ctrl->ctrls[i];
+			}
+		}
+		kfree(exp_ctrl->ctrls);
+		exp_ctrl->ctrls = NULL;
+
+		exp_t->exp.cnt = 1;
+		exp_t->exp.class = exp_ctrl->class;
+		exp_t->exp.ctrls = ctrl_exp_t;
+		exp_g->exp.cnt = 2;
+		exp_g->exp.class = exp_ctrl->class;
+		exp_g->exp.ctrls = ctrl_exp_g;
+
+		if (dev->img_src_exps.exp_valid_frms[VALID_FR_EXP_T_INDEX] <
+			dev->img_src_exps.exp_valid_frms[VALID_FR_EXP_G_INDEX]) {
+			spin_lock_irqsave(&dev->img_src_exps.lock, lock_flags);
+			list_add_tail(&exp_g->list, &dev->img_src_exps.list);
+			list_add_tail(&exp_t->list, &dev->img_src_exps.list);
+			spin_unlock_irqrestore(&dev->img_src_exps.lock, lock_flags);
+		} else {
+			spin_lock_irqsave(&dev->img_src_exps.lock, lock_flags);
+			list_add_tail(&exp_t->list, &dev->img_src_exps.list);
+			list_add_tail(&exp_g->list, &dev->img_src_exps.list);
+			spin_unlock_irqrestore(&dev->img_src_exps.lock, lock_flags);
+		}
 	}
-
-	exp->exp = exp_ctrl;
-
-	spin_lock_irqsave(&dev->img_src_exps.lock, lock_flags);
-	list_add(&exp->list, &dev->img_src_exps.list);
-	spin_unlock_irqrestore(&dev->img_src_exps.lock, lock_flags);
-
 	return 0;
 
 failed:
@@ -6321,7 +6485,22 @@ failed:
 		kfree(exp);
 		exp = NULL;
 	}
-
+	if (exp_t) {
+		kfree(exp_t);
+		exp_t = NULL;
+	}
+	if (exp_g) {
+		kfree(exp_g);
+		exp_g = NULL;
+	}
+	if (ctrl_exp_t) {
+		kfree(ctrl_exp_t);
+		ctrl_exp_t = NULL;
+	}
+	if (ctrl_exp_g) {
+		kfree(ctrl_exp_g);
+		ctrl_exp_g = NULL;
+	}
 	return retval;
 }
 
@@ -6705,6 +6884,7 @@ int cif_isp11_s_ctrl(
 	case CIF_ISP11_CID_AUTO_FPS:
 	case CIF_ISP11_CID_HFLIP:
 	case CIF_ISP11_CID_VFLIP:
+	case CIF_ISP11_CID_BAND_STOP_FILTER:
 		return cif_isp11_img_src_s_ctrl(dev->img_src,
 			id, val);
 	default:
@@ -6795,139 +6975,54 @@ int cif_isp11_mipi_isr(unsigned int mipi_mis, void *cntxt)
 	struct cif_isp11_device *dev =
 	    (struct cif_isp11_device *)cntxt;
 	unsigned int mipi_ris = 0;
-	unsigned int i = 0;
 
 	mipi_ris = cif_ioread32(dev->config.base_addr +	CIF_MIPI_RIS);
+	mipi_mis = cif_ioread32(dev->config.base_addr + CIF_MIPI_MIS);
 
 	cif_isp11_pltfrm_rtrace_printf(dev->dev,
 		"MIPI_MIS %08x, MIPI_RIS %08x, MIPI_IMSC %08x\n",
 		mipi_mis,
-		cif_ioread32(dev->config.base_addr + CIF_MIPI_RIS),
+		mipi_ris,
 		cif_ioread32(dev->config.base_addr + CIF_MIPI_IMSC));
 
+	cif_iowrite32(~0,
+		dev->config.base_addr + CIF_MIPI_ICR);
+
 	if (mipi_mis & CIF_MIPI_ERR_DPHY) {
-		/* clear_mipi_dphy_error*/
-		cif_iowrite32(CIF_MIPI_ERR_DPHY,
-			      dev->config.base_addr + CIF_MIPI_ICR);
-
-		for (i = 0;
-		     i <
-		     (sizeof(cif_isp11_hw_errors) /
-		      sizeof(struct cif_isp11_hw_error)); i++) {
-			if (cif_isp11_hw_errors[i].type != 1)
-				continue;	/*skip if not mipi dphy error*/
-
-			if (cif_isp11_hw_errors[i].
-			    mask & (mipi_mis & CIF_MIPI_ERR_DPHY)) {
-				cif_isp11_hw_errors[i].count++;
-				cif_isp11_pltfrm_pr_err(dev->dev,
-					"CIF_MIPI_ERR_DPHY 0x%x\n",
-					mipi_ris);
-				break;
-			}
-		}
+		cif_isp11_pltfrm_pr_warn(dev->dev,
+			"CIF_MIPI_ERR_DPHY: 0x%x\n", mipi_mis);
+		/*
+		*Disable DPHY errctrl interrupt, because this dphy erctrl signal
+		*is assert and until the next changes in line state. This time is may
+		*be too long and cpu is hold in this interrupt.
+		*/
+		if (mipi_mis & CIF_MIPI_ERR_CTRL(3))
+			cif_iowrite32AND(~(CIF_MIPI_ERR_CTRL(3)),
+				dev->config.base_addr + CIF_MIPI_IMSC);
 	}
+
 	if (mipi_mis & CIF_MIPI_ERR_CSI) {
-		/*clear_mipi_csi_error*/
-		cif_iowrite32(CIF_MIPI_ERR_CSI,
-			      dev->config.base_addr + CIF_MIPI_ICR);
-
-		for (i = 0;
-		     i <
-		     (sizeof(cif_isp11_hw_errors) /
-		      sizeof(struct cif_isp11_hw_error)); i++) {
-			if (cif_isp11_hw_errors[i].type != 2)
-				continue;	/*skip if not mipi csi error*/
-
-			if (cif_isp11_hw_errors[i].
-			    mask & (mipi_mis & CIF_MIPI_ERR_CSI)) {
-				cif_isp11_hw_errors[i].count++;
-				cif_isp11_pltfrm_pr_err(dev->dev,
-					"CIF_MIPI_ERR_CSI 0x%x\n",
-					mipi_ris);
-				break;
-			}
-		}
-	}
-	if ((mipi_mis & CIF_MIPI_SYNC_FIFO_OVFLW(3))) {
-		/* clear_mipi_fifo_error*/
-		cif_iowrite32(CIF_MIPI_SYNC_FIFO_OVFLW(3),
-			      dev->config.base_addr + CIF_MIPI_ICR);
-
-		cif_iowrite32OR(CIF_MIPI_CTRL_OUTPUT_ENA,
-				dev->config.base_addr + CIF_MIPI_CTRL);
-		for (i = 0; i < (sizeof(cif_isp11_hw_errors) / sizeof(struct cif_isp11_hw_error)); i++) {
-			if (cif_isp11_hw_errors[i].type != 2)
-				continue;	/*skip if not mipi error*/
-
-			if (cif_isp11_hw_errors[i].mask & (mipi_mis & CIF_MIPI_SYNC_FIFO_OVFLW(3))) {
-				u32 mi_status = cif_ioread32(dev->config.base_addr +
-					CIF_MI_STATUS);
-
-				cif_isp11_hw_errors[i].count++;
-				if (mi_status & (CIF_MI_STATUS_MP_Y_FIFO_FULL |
-					CIF_MI_STATUS_SP_Y_FIFO_FULL))
-					cif_isp11_pltfrm_pr_err(dev->dev,
-						"CIF_MIPI_SYNC_FIFO_OVFLW, backpressure (0x%08x)\n",
-						mi_status);
-				else
-					cif_isp11_pltfrm_pr_err(dev->dev,
-						"CIF_MIPI_SYNC_FIFO_OVFLW 0x%x\n",
-						mipi_ris);
-				break;
-			}
-		}
-
-		cif_iowrite32AND_verify(~CIF_MI_CTRL_SP_ENABLE,
-			dev->config.base_addr + CIF_MI_CTRL, ~0);
-
-		cif_iowrite32AND_verify(~(CIF_MI_CTRL_MP_ENABLE_IN |
-			CIF_MI_CTRL_SP_ENABLE |
-			CIF_MI_CTRL_JPEG_ENABLE |
-			CIF_MI_CTRL_RAW_ENABLE),
-			dev->config.base_addr + CIF_MI_CTRL, ~0);
-
-		cif_iowrite32(CIF_MI_INIT_SOFT_UPD,
-			dev->config.base_addr + CIF_MI_INIT);
-		cif_iowrite32AND(~(CIF_ISP_CTRL_ISP_INFORM_ENABLE |
-		CIF_ISP_CTRL_ISP_ENABLE), dev->config.base_addr + CIF_ISP_CTRL);
-		cif_iowrite32OR(CIF_ISP_CTRL_ISP_CFG_UPD,
-			dev->config.base_addr + CIF_ISP_CTRL);
-		cif_iowrite32AND(~CIF_MIPI_CTRL_OUTPUT_ENA,
-			dev->config.base_addr + CIF_MIPI_CTRL);
-
-		cif_iowrite32(0x00000841, dev->config.base_addr + CIF_IRCL);
-		cif_iowrite32(0x0, dev->config.base_addr + CIF_IRCL);
-
+		cif_isp11_pltfrm_pr_warn(dev->dev,
+			"CIF_MIPI_ERR_CSI: 0x%x\n", mipi_mis);
 	}
 
-	if (mipi_mis & CIF_MIPI_ADD_DATA_OVFLW) {
-		/* clear_mipi_fifo_error*/
-		cif_iowrite32(CIF_MIPI_ADD_DATA_OVFLW,
-			      dev->config.base_addr + CIF_MIPI_ICR);
-
-		for (i = 0; i < (sizeof(cif_isp11_hw_errors) /
-			sizeof(struct cif_isp11_hw_error)); i++) {
-			if (cif_isp11_hw_errors[i].type != 1)
-				continue;	/*skip if not mipi error*/
-			if (cif_isp11_hw_errors[i].
-			    mask & (mipi_mis & CIF_MIPI_ADD_DATA_OVFLW)) {
-				cif_isp11_hw_errors[i].count++;
-				cif_isp11_pltfrm_pr_err(dev->dev,
-					"CIF_MIPI_ADD_DATA_OVFLW");
-				break;
-			}
-		}
+	if (mipi_mis & CIF_MIPI_SYNC_FIFO_OVFLW(3)) {
+		cif_isp11_pltfrm_pr_warn(dev->dev,
+			"CIF_MIPI_SYNC_FIFO_OVFLW: 0x%x\n", mipi_mis);
 	}
 
-	if (mipi_mis & CIF_MIPI_FRAME_END) {
-		cif_iowrite32(CIF_MIPI_FRAME_END,
-			      dev->config.base_addr + CIF_MIPI_ICR);
+	if (mipi_mis == CIF_MIPI_FRAME_END) {
+		/*
+		*Enable DPHY errctrl interrupt again, if mipi have receive
+		*the whole frame without any error.
+		*/
+		cif_iowrite32OR(CIF_MIPI_ERR_CTRL(3),
+			dev->config.base_addr + CIF_MIPI_IMSC);
 	}
 
 	mipi_mis = cif_ioread32(dev->config.base_addr + CIF_MIPI_MIS);
 
-	if (mipi_mis & CIF_MIPI_FRAME_END) {
+	if (mipi_mis) {
 		cif_isp11_pltfrm_pr_err(dev->dev,
 			"mipi_mis icr err: 0x%x\n", mipi_mis);
 	}
@@ -6950,9 +7045,10 @@ int cif_isp11_isp_isr(unsigned int isp_mis, void *cntxt)
 				cif_ioread32(dev->config.base_addr + CIF_ISP_IMSC));
 
 	if (isp_mis & CIF_ISP_V_START) {
-		struct cif_isp11_isp_vs_work *vs_wk;
 		struct cif_isp11_img_src_exp *exp;
 
+		if (ddr_freq_scale_send_event)
+			ddr_freq_scale_send_event(ISP_VS_EVENT, 0);
 		do_gettimeofday(&tv);
 		dev->b_isp_frame_in = false;
 		dev->b_mi_frame_end = false;
@@ -6984,23 +7080,8 @@ int cif_isp11_isp_isr(unsigned int isp_mis, void *cntxt)
 			exp = NULL;
 		spin_unlock(&dev->img_src_exps.lock);
 
-		if (exp) {
-			vs_wk = kmalloc(sizeof(struct cif_isp11_isp_vs_work),
-				GFP_KERNEL);
-			if (vs_wk) {
-				vs_wk->cmd = CIF_ISP11_VS_EXP;
-				vs_wk->dev = dev;
-				vs_wk->param = (void *)exp;
-				INIT_WORK((struct work_struct *)&vs_wk->work,
-					cif_isp11_vs_work);
-				if (!queue_work(dev->vs_wq,
-					(struct work_struct *)&vs_wk->work)) {
-					cif_isp11_pltfrm_pr_err(dev->dev,
-						"%s: queue work failed\n", __func__);
-					kfree(vs_wk);
-				}
-			}
-		}
+		if (exp)
+			cif_isp11_vs_work_cmd(dev, CIF_ISP11_VS_EXP, (void *)exp);
 	}
 
 	if (isp_mis & CIF_ISP_FRAME_IN) {

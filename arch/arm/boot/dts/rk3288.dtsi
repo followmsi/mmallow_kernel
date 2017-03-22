@@ -554,7 +554,7 @@
 			<&clk_edp 200000000>, <&clk_isp 200000000>,
 			<&clk_isp_jpe 400000000>, <&clk_tsp 80000000>,
 			<&clk_tspout 80000000>, <&clk_mac 125000000>,
-			<&aclk_vio0 594000000>;
+			<&aclk_vio0 594000000>, <&usbphy_480m 480000000>;
 		/* rockchip,clocks-uboot-has-init = <&aclk_vio0>; */
 	};
 
@@ -589,6 +589,7 @@
 				/* PD_PERI */
 				<&aclk_peri>, <&hclk_peri>,
 				<&pclk_peri>,
+				<&clk_gates7 5>,/* hclk_otg0_pmu */
 
 				/* JTAG */
 				/* <&clk_gates4 14>, */
@@ -791,6 +792,7 @@
 		interrupts = <GIC_SPI 98 IRQ_TYPE_LEVEL_HIGH>;
 		clocks = <&clk_edp>, <&clk_edp_24m>, <&clk_gates16 8>;
 		clock-names = "clk_edp", "clk_edp_24m", "pclk_edp";
+		rockchip,edp-audio-enable = <0>;
 	};
 
 	hdmi: hdmi@ff980000 {
@@ -884,16 +886,13 @@
 		pinctrl-1 = <&i2s_gpio>;
 	};
 
-	spdif: rockchip-spdif@0xff8b0000 {
+	spdif: rockchip-spdif@0xff880000 {
 		compatible = "rockchip-spdif";
-		reg = <0xff8b0000 0x10000>;//8channel
-		//reg = <ff880000 0x10000>;//2channel
-		clocks = <&clk_spdif>, <&clk_spdif_8ch>,<&clk_gates10 11>;
-		clock-names = "spdif_mclk","spdif_8ch_mclk","spdif_hclk";
-		interrupts = <GIC_SPI 86 IRQ_TYPE_LEVEL_HIGH>;
-		dmas = <&pdma0 3>;
-		//dmas = <&pdma0 2>; //2channel
-		//#dma-cells = <1>;
+		reg = <0xff880000 0x1000>;
+		clocks = <&clk_spdif>, <&clk_gates10 10>;
+		clock-names = "spdif_mclk", "spdif_hclk";
+		interrupts = <GIC_SPI 54 IRQ_TYPE_LEVEL_HIGH>;
+		dmas = <&pdma0 2>;
 		dma-names = "tx";
 		pinctrl-names = "default";
 		pinctrl-0 = <&spdif_tx>;
@@ -1045,6 +1044,12 @@
 						>;
 
 					channel = <2>;
+					/*
+					 * 0: use standard flow
+					 * 1: vop dclk never divided
+					 * 2: vop dclk always divided
+					 */
+					vop-dclk-mode = <0>;
 					status = "disabled";
 				};
 			};

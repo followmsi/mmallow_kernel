@@ -57,6 +57,10 @@ static struct dw_mci_rockchip_compatible {
 		.compatible	= "rockchip,rk322x-sdmmc",
 		.ctrl_type	= DW_MCI_TYPE_RK322X,
 	},
+	{
+		.compatible	= "rockchip,rk322xh-sdmmc",
+		.ctrl_type	= DW_MCI_TYPE_RK322XH,
+	},
 };
 
 #define syscon_find(np, property) \
@@ -85,6 +89,16 @@ static int dw_mci_rockchip_priv_init(struct dw_mci *host)
 					return PTR_ERR(host->grf);
 				}
 			}
+
+			if (priv->ctrl_type == DW_MCI_TYPE_RK322XH) {
+				host->grf =
+				    syscon_regmap_lookup_by_phandle(
+					host->dev->of_node, "rockchip,grf");
+				if (IS_ERR(host->grf)) {
+					pr_err("No rockchip,grf phandle specified");
+					return PTR_ERR(host->grf);
+				}
+			}
 		}
 	}
 
@@ -100,7 +114,8 @@ static int dw_mci_rockchip_setup_clock(struct dw_mci *host)
 	    (priv->ctrl_type == DW_MCI_TYPE_RK3036) ||
 	    (priv->ctrl_type == DW_MCI_TYPE_RK312X) ||
 	    (priv->ctrl_type == DW_MCI_TYPE_RK3368) ||
-	    (priv->ctrl_type == DW_MCI_TYPE_RK322X))
+	    (priv->ctrl_type == DW_MCI_TYPE_RK322X) ||
+	    (priv->ctrl_type == DW_MCI_TYPE_RK322XH))
 		host->bus_hz /= (priv->ciu_div + 1);
 
 	return 0;
@@ -152,6 +167,7 @@ static int rockchip_mmc_set_phase(int degrees, struct dw_mci *host)
 		sample_mask = 0x07ff;
 		break;
 	case DW_MCI_TYPE_RK322X:
+	case DW_MCI_TYPE_RK322XH:
 		delay_sel = 1 << 11;
 		sample_delaynum_offset = 0x3;
 		sample_degree_offset = 0x1;
@@ -400,7 +416,7 @@ static int dw_mci_rockchip_probe(struct platform_device *pdev)
 
 static struct platform_driver dw_mci_rockchip_pltfm_driver = {
 	.probe		= dw_mci_rockchip_probe,
-	.remove		= __exit_p(dw_mci_pltfm_remove),
+	.remove		= dw_mci_pltfm_remove,
 	.driver		= {
 		.name		= "dwmmc_rockchip",
 		.of_match_table	= dw_mci_rockchip_match,

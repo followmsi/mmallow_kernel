@@ -32,6 +32,7 @@
 #include <linux/pci.h>
 #include "common.h"
 #include <linux/ptp_clock_kernel.h>
+#include <linux/reset.h>
 
 struct stmmac_priv {
 	/* Frequently used values are kept adjacent for cache effect */
@@ -115,12 +116,14 @@ enum {
 	RK312X_GMAC,
 	RK3368_GMAC,
 	RK322X_GMAC,
-	RK1108_GMAC
+	RK322XH_GMAC,
+	RV1108_GMAC,
+	RK_MAX_GMAC
 };
 
 struct bsp_priv {
 	struct regmap *grf;
-	struct regmap *cru;
+	struct reset_control *macphy_reset;
 	struct platform_device *pdev;
 	bool power_ctrl_by_pmu;
 	char pmu_regulator[32];
@@ -161,8 +164,8 @@ struct bsp_priv {
 	struct clk *clk_macphy;
 	bool clk_enable;
 
-	int (*phy_power_on)(bool enable);
-	int (*gmac_clk_enable)(bool enable);
+	int (*phy_power_on)(struct bsp_priv *bsp_priv, bool enable);
+	int (*gmac_clk_enable)(struct bsp_priv *bsp_priv, bool enable);
 };
 
 extern int phyaddr;

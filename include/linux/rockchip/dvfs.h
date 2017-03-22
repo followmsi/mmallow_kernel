@@ -53,6 +53,10 @@ struct vd_node {
 	struct regulator	*regulator;
 	struct list_head	node;
 	struct list_head	pd_list;
+	/*count the total nodes for voltage init when dvfs start working */
+	int volt_init_total_cnt;
+	/*count the enabled nodes for voltage init when dvfs start working */
+	int volt_init_enable_cnt;
 	struct mutex		mutex;
 	dvfs_set_rate_callback	vd_dvfs_target;
 	unsigned int 		n_voltages;
@@ -113,6 +117,8 @@ struct lkg_info {
  * @name:		Dvfs clock's Name
  * @set_freq:		Dvfs clock's Current Frequency
  * @set_volt:		Dvfs clock's Current Voltage
+ * @is_initialized:	Indicating dvfs node initialized or not
+ * @skip_adjusting_volt:Indicating skip adjusting volt or not
  * @enable_dvfs:	Sign if DVFS clock enable
  * @clk:		System clk's point
  * @pd:			Power Domains dvfs clock belongs to
@@ -122,10 +128,11 @@ struct lkg_info {
  * @clk_dvfs_target:	Callback function
  */
 struct dvfs_node {
-	struct device		dev;		//for opp
 	const char		*name;
 	int			set_freq;	//KHZ
 	int			set_volt;	//MV
+	bool			is_initialized;
+	int			skip_adjusting_volt;
 	int			enable_count;
 	int			freq_limit_en;	//sign if use limit frequency
 	int			support_pvtm;
@@ -136,15 +143,16 @@ struct dvfs_node {
 	unsigned int		channel;
 	unsigned int		tsadc_ch;
 	unsigned long		temp_limit_rate;
-	unsigned int        target_temp;
+	int			target_temp;
 	unsigned int        temp_limit_enable;
 	unsigned int	    min_temp_limit;
+	unsigned int	    max_temp_limit;
 	int                 old_temp;
 	struct clk 		*clk;
 	struct pd_node		*pd;
 	struct vd_node		*vd;
 	struct list_head	node;
-	struct notifier_block	*dvfs_nb;
+	struct notifier_block	dvfs_nb;
 	struct delayed_work	dwork;
 	struct cpufreq_frequency_table	*dvfs_table;
 	struct cpufreq_frequency_table	*pvtm_table;
@@ -231,7 +239,9 @@ int rk_regist_vd(struct vd_node *vd);
 int rk_regist_pd(struct pd_node *pd);
 int rk_regist_clk(struct dvfs_node *clk_dvfs_node);
 struct regulator *dvfs_get_regulator(char *regulator_name);
-int of_dvfs_init(void);
+int __init of_dvfs_init(void);
+void register_dvfs_notifier_callback(struct dvfs_node *dvfs_node,
+				     notifier_fn_t callback);
 
 #else
 
@@ -265,6 +275,8 @@ static inline int rk_regist_pd(struct pd_node *pd){ return 0; };
 static inline int rk_regist_clk(struct dvfs_node *clk_dvfs_node){ return 0; };
 static inline struct regulator *dvfs_get_regulator(char *regulator_name){ return NULL; };
 static inline int of_dvfs_init(void){ return 0; };
+static inline void register_dvfs_notifier_callback(struct dvfs_node *dvfs_node,
+						   notifier_fn_t callback){ };
 #endif
 
 #endif

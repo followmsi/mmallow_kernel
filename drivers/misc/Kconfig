@@ -137,6 +137,12 @@ config PHANTOM
 	  If you choose to build module, its name will be phantom. If unsure,
 	  say N here.
 
+config RK_DEVICEINFO
+	tristate "support deviceinfo partition"
+	default n
+	help
+	  Say Y here if you have a deviceinfo partition.
+
 config INTEL_MID_PTI
 	tristate "Parallel Trace Interface for MIPI P1149.7 cJTAG standard"
 	depends on PCI && TTY
@@ -459,7 +465,7 @@ config ARM_CHARLCD
 	  still useful.
 
 config BMP085
-	bool
+	tristate
 	depends on SYSFS
 
 config BMP085_I2C
@@ -565,6 +571,18 @@ config ONBOARD_MODEM
 	tristate "on board 4g module control interface"
 	help
 	  on board 4g module control interface.
+
+config RESUME_REBOOT
+	bool "reboot when late resume if reboot flag is set"
+	default n
+	help
+	  This driver is to reboot when late resume if reboot flag is set.
+	  if your need this function please select it.
+
+config MOTOR_GPIO
+	bool "motor gpio driver"
+	help
+	  Enable this driver will support motor gpio.
 
 source "drivers/misc/c2port/Kconfig"
 source "drivers/misc/eeprom/Kconfig"

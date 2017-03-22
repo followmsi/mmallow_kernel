@@ -112,6 +112,7 @@ static inline u64 val_mask(int val, u64 msk, int shift)
 #define  V_MCU_FRAME_ST(x)			VAL_MASK(x, 1, 28)
 #define  V_MCU_RS(x)				VAL_MASK(x, 1, 29)
 #define  V_MCU_BYPASS(x)			VAL_MASK(x, 1, 30)
+#define  V_MCU_TYPE(x)				VAL_MASK(x, 1, 31)
 #define SYS_CTRL0			0x00000010
 #define  V_DIRECT_PATH_EN(x)			VAL_MASK(x, 1, 0)
 #define  V_DIRECT_PATH_LAYER_SEL(x)		VAL_MASK(x, 1, 1)
@@ -446,18 +447,24 @@ static inline u64 val_mask(int val, u64 msk, int shift)
 /* GRF register for VOP source select */
 #define GRF_WEN_SHIFT(x)	(BIT(x) << 16)
 
-#define GRF_SOC_CON0		0x0400
-#define V_LVDS_VOP_SEL(x)		(((x) << 0) | GRF_WEN_SHIFT(0))
-#define V_HDMI_VOP_SEL(x)		(((x) << 1) | GRF_WEN_SHIFT(1))
-#define V_DSI0_VOP_SEL(x)		(((x) << 2) | GRF_WEN_SHIFT(2))
+#define RK3366_GRF_SOC_CON0		0x0400
+#define RK3366_V_LVDS_VOP_SEL(x)		(((x) << 0) | GRF_WEN_SHIFT(0))
+#define RK3366_V_HDMI_VOP_SEL(x)		(((x) << 1) | GRF_WEN_SHIFT(1))
+#define RK3366_V_DSI0_VOP_SEL(x)		(((x) << 2) | GRF_WEN_SHIFT(2))
 
-#define GRF_SOC_CON5		0x0414
-#define V_RGB_VOP_SEL(x)		(((x) << 4) | GRF_WEN_SHIFT(4))
+#define RV1108_VOP_GRF_CON4		0x0410
+#define RV1108_GRF_DCLK_INV(x)		((((x) << 4) | GRF_WEN_SHIFT(4)) | \
+					(((x) << 5) | GRF_WEN_SHIFT(5)))
+#define RK3366_GRF_SOC_CON4		0x0410
+#define RK3366_GRF_VOP1_DCLK_INV(x)	(((x) << 7) | GRF_WEN_SHIFT(7))
 
-#define GRF_IO_VSEL		0x0900
-#define V_VOP_IOVOL_SEL(x)		(((x) << 0) | GRF_WEN_SHIFT(0))
+#define RK3366_GRF_SOC_CON5		0x0414
+#define RK3366_V_RGB_VOP_SEL(x)		(((x) << 4) | GRF_WEN_SHIFT(4))
 
-/* rk1108 only*/
+#define RK3366_GRF_IO_VSEL		0x0900
+#define RK3366_V_VOP_IOVOL_SEL(x)		(((x) << 0) | GRF_WEN_SHIFT(0))
+
+/* RV1108 only*/
 #define DPHY_TTL_EN		0x038c
 #define DPHY_TTL_LANE_EN	0x03ac
 #define MIPI_DSI_HOST_PHY_RSTZ	0x00a0
@@ -497,7 +504,7 @@ struct vop_device {
 	/* active layer counter,when atv_layer_cnt = 0,disable lcdc */
 	u8 atv_layer_cnt;
 
-	unsigned int		irq;
+	int irq;
 
 	struct clk		*hclk;	/* lcdc AHP clk */
 	struct clk		*dclk;	/* lcdc dclk */
@@ -685,7 +692,7 @@ enum _bcsh_video_mode {
 };
 
 enum {
-	VOP_RK1108,
+	VOP_RV1108,
 	VOP_RK3366,
 };
 

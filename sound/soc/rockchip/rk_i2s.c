@@ -107,6 +107,7 @@ static void rockchip_snd_txctrl(struct rk_i2s_dev *i2s, int on)
 					   I2S_XFER_TXS_STOP |
 					   I2S_XFER_RXS_STOP);
 
+			udelay(150);
 			regmap_update_bits(i2s->regmap, I2S_CLR,
 					   I2S_CLR_TXC_MASK | I2S_CLR_RXC_MASK,
 					   I2S_CLR_TXC | I2S_CLR_RXC);
@@ -162,6 +163,7 @@ static void rockchip_snd_rxctrl(struct rk_i2s_dev *i2s, int on)
 					   I2S_XFER_TXS_STOP |
 					   I2S_XFER_RXS_STOP);
 
+			udelay(150);
 			regmap_update_bits(i2s->regmap, I2S_CLR,
 					   I2S_CLR_TXC_MASK | I2S_CLR_RXC_MASK,
 					   I2S_CLR_TXC | I2S_CLR_RXC);
@@ -314,6 +316,9 @@ static int rockchip_i2s_hw_params(struct snd_pcm_substream *substream,
 				   I2S_TXCR_VDW_MASK |
 				   I2S_TXCR_CSR_MASK,
 				   val);
+#if defined(CONFIG_RK_HDMI) && defined(CONFIG_SND_RK_SOC_HDMI_I2S)
+		snd_config_hdmi_audio(params);
+#endif
 	} else {
 		regmap_update_bits(i2s->regmap, I2S_RXCR,
 				   I2S_RXCR_CSR_MASK |
@@ -324,9 +329,6 @@ static int rockchip_i2s_hw_params(struct snd_pcm_substream *substream,
 			   I2S_DMACR_TDL_MASK | I2S_DMACR_RDL_MASK,
 			   I2S_DMACR_TDL(16) | I2S_DMACR_RDL(16));
 
-#if defined(CONFIG_RK_HDMI) && defined(CONFIG_SND_RK_SOC_HDMI_I2S)
-	snd_config_hdmi_audio(params);
-#endif
 	spin_unlock_irqrestore(&lock, flags);
 
 	return 0;
@@ -432,7 +434,7 @@ static struct snd_soc_dai_ops rockchip_i2s_dai_ops = {
 #define ROCKCHIP_I2S_FORMATS (SNDRV_PCM_FMTBIT_S16_LE | \
 			      SNDRV_PCM_FMTBIT_S20_3LE | \
 			      SNDRV_PCM_FMTBIT_S24_LE | \
-			      SNDRV_PCM_FORMAT_S32_LE)
+			      SNDRV_PCM_FMTBIT_S32_LE)
 
 static struct snd_soc_dai_driver rockchip_i2s_dai = {
 	.probe = rockchip_i2s_dai_probe,

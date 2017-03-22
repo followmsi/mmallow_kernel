@@ -36,12 +36,14 @@
  */
 
 #include <linux/platform_device.h>
+#include <linux/usb/xhci_pdriver.h>
 
 #include "core.h"
 
 int dwc3_host_init(struct dwc3 *dwc)
 {
 	struct platform_device	*xhci;
+	struct usb_xhci_pdata	pdata;
 	int			ret;
 
 	xhci = platform_device_alloc("xhci-hcd", PLATFORM_DEVID_AUTO);
@@ -56,6 +58,7 @@ int dwc3_host_init(struct dwc3 *dwc)
 	xhci->dev.parent	= dwc->dev;
 	xhci->dev.dma_mask	= dwc->dev->dma_mask;
 	xhci->dev.dma_parms	= dwc->dev->dma_parms;
+	xhci->dev.archdata      = dwc->dev->archdata;
 
 	dwc->xhci = xhci;
 
@@ -63,6 +66,17 @@ int dwc3_host_init(struct dwc3 *dwc)
 						DWC3_XHCI_RESOURCES_NUM);
 	if (ret) {
 		dev_err(dwc->dev, "couldn't add resources to xHCI device\n");
+		goto err1;
+	}
+
+	memset(&pdata, 0, sizeof(pdata));
+
+	pdata.usb3_lpm_capable = dwc->usb3_lpm_capable;
+	pdata.usb3_disable_autosuspend = dwc->dis_u3_autosuspend_quirk;
+
+	ret = platform_device_add_data(xhci, &pdata, sizeof(pdata));
+	if (ret) {
+		dev_err(dwc->dev, "couldn't add platform data to xHCI device\n");
 		goto err1;
 	}
 

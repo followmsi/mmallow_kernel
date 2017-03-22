@@ -684,6 +684,7 @@ static void stmmac_release_ptp(struct stmmac_priv *priv)
 }
 
 static int g_bmcr = 0;
+static int g_bmcr_change = 0;
 
 /**
  * stmmac_adjust_link
@@ -708,7 +709,9 @@ static void stmmac_adjust_link(struct net_device *dev)
 	spin_lock_irqsave(&priv->lock, flags);
 
 	bsp_priv->link = phydev->link;
-	if ((bsp_priv->chip == RK322X_GMAC) && (bsp_priv->internal_phy) &&
+	if ((bsp_priv->chip == RK322X_GMAC ||
+	     bsp_priv->chip == RK322XH_GMAC) &&
+	    (bsp_priv->internal_phy) &&
 	    (phydev->link != priv->oldlink)) {
 		if (phydev->link) {
 			if (gpio_is_valid(bsp_priv->link_io))
@@ -716,9 +719,10 @@ static void stmmac_adjust_link(struct net_device *dev)
 				gpio_direction_output(bsp_priv->link_io,
 						      bsp_priv->link_io_level);
 		} else {
-			if (priv->speed == 10) {
+			if (priv->speed == 10 && g_bmcr_change) {
 				/* restore MII_BMCR */
 				phy_write(phydev, MII_BMCR, g_bmcr);
+                                g_bmcr_change = 0;
 			}
 
 			if (gpio_is_valid(bsp_priv->link_io))
@@ -768,7 +772,8 @@ static void stmmac_adjust_link(struct net_device *dev)
 				}
 				stmmac_hw_fix_mac_speed(priv);
 
-				if ((bsp_priv->chip == RK322X_GMAC) &&
+				if ((bsp_priv->chip == RK322X_GMAC ||
+				     bsp_priv->chip == RK322XH_GMAC) &&
 				    (bsp_priv->internal_phy) &&
 				    (phydev->speed == 10)) {
 					int an_expan;
@@ -785,6 +790,7 @@ static void stmmac_adjust_link(struct net_device *dev)
 						pr_info("10BT-no auto-neg\n");
 						phy_write(phydev, MII_BMCR,
 							  0x100);
+                                                g_bmcr_change = 1;
 					}
 				}
 
@@ -1062,11 +1068,14 @@ static int stmmac_init_phy(struct net_device *dev)
 
 	gmac_create_sysfs(phydev);
 
-	if ((bsp_priv->chip == RK322X_GMAC) && (bsp_priv->internal_phy)) {
+	if ((bsp_priv->chip == RK322X_GMAC ||
+	     bsp_priv->chip == RK322XH_GMAC) &&
+	    (bsp_priv->internal_phy)) {
 		rk322x_phy_adjust(phydev);
-		/* LED off */
-		gpio_direction_output(bsp_priv->led_io,
-				      !bsp_priv->led_io_level);
+		if (gpio_is_valid(bsp_priv->led_io))
+			/* LED off */
+			gpio_direction_output(bsp_priv->led_io,
+					      !bsp_priv->led_io_level);
 	}
 
 	INIT_DELAYED_WORK(&bsp_priv->led_work, macphy_led_work);
@@ -1215,7 +1224,7 @@ static int stmmac_init_rx_buffers(struct stmmac_priv *priv, struct dma_desc *p,
  * and allocates the socket buffers. It suppors the chained and ring
  * modes.
  */
-static void init_dma_desc_rings(struct net_device *dev)
+static int init_dma_desc_rings(struct net_device *dev)
 {
 	int i;
 	struct stmmac_priv *priv = netdev_priv(dev);
@@ -1246,8 +1255,10 @@ static void init_dma_desc_rings(struct net_device *dev)
 							  dma_extended_desc),
 						   &priv->dma_tx_phy,
 						   GFP_KERNEL);
-		if ((!priv->dma_erx) || (!priv->dma_etx))
-			return;
+		if ((!priv->dma_erx) || (!priv->dma_etx)) {
+			dev_err(&dev->dev, "dma_alloc_coherent dma_etx or dmaerx fail \n");
+			return -ENOMEM;
+		}
 	} else {
 		priv->dma_rx = dma_alloc_coherent(priv->device, rxsize *
 						  sizeof(struct dma_desc),
@@ -1257,8 +1268,10 @@ static void init_dma_desc_rings(struct net_device *dev)
 						  sizeof(struct dma_desc),
 						  &priv->dma_tx_phy,
 						  GFP_KERNEL);
-		if ((!priv->dma_rx) || (!priv->dma_tx))
-			return;
+		if ((!priv->dma_rx) || (!priv->dma_tx)) {
+			dev_err(&dev->dev, "dma_alloc_coherent dma_tx or dma_rx fail \n");
+			return -ENOMEM;
+		}
 
 		memset(priv->dma_rx, 0, rxsize * sizeof(struct dma_desc));
 		memset(priv->dma_tx, 0, txsize * sizeof(struct dma_desc));
@@ -1330,6 +1343,8 @@ static void init_dma_desc_rings(struct net_device *dev)
 
 	if (netif_msg_hw(priv))
 		stmmac_display_rings(priv);
+
+	return 0;
 }
 
 static void dma_free_rx_skbufs(struct stmmac_priv *priv)
@@ -1708,7 +1723,13 @@ static void stmmac_check_ether_addr(struct stmmac_priv *priv)
 					     priv->dev->base_addr,
 					     priv->dev->dev_addr, 0);
 		if (!is_valid_ether_addr(priv->dev->dev_addr))
+			eth_mac_devinfo(priv->dev->dev_addr);
+		if (!is_valid_ether_addr(priv->dev->dev_addr))
+			eth_mac_vendor_storage(priv->dev->dev_addr);
+		if (!is_valid_ether_addr(priv->dev->dev_addr))
 			eth_mac_idb(priv->dev->dev_addr);
+		if (!is_valid_ether_addr(priv->dev->dev_addr))
+			eth_mac_file(priv->dev->dev_addr);
 		if (!is_valid_ether_addr(priv->dev->dev_addr))
 			eth_hw_addr_random(priv->dev);
 	}
@@ -1795,10 +1816,10 @@ static int stmmac_open(struct net_device *dev)
 		struct bsp_priv * bsp_priv = priv->plat->bsp_priv;
 		if (bsp_priv) { 
 			if (bsp_priv->phy_power_on) {
-				bsp_priv->phy_power_on(true);
+				bsp_priv->phy_power_on(bsp_priv, true);
 			}
 			if (bsp_priv->gmac_clk_enable) {
-				bsp_priv->gmac_clk_enable(true);
+				bsp_priv->gmac_clk_enable(bsp_priv, true);
 			}
 		}
 	}
@@ -1830,7 +1851,11 @@ static int stmmac_open(struct net_device *dev)
 	priv->dma_tx_size = STMMAC_ALIGN(dma_txsize);
 	priv->dma_rx_size = STMMAC_ALIGN(dma_rxsize);
 	priv->dma_buf_sz = STMMAC_ALIGN(buf_sz);
-	init_dma_desc_rings(dev);
+	ret = init_dma_desc_rings(dev);
+	if (ret < 0) {
+		pr_err("%s: init_dma_desc_rings failed\n", __func__);
+		goto open_error;
+	}
 
 	/* DMA initialization and SW reset */
 	ret = stmmac_init_dma_engine(priv);
@@ -1948,7 +1973,7 @@ open_error:
 	if ((priv->plat) && (priv->plat->bsp_priv)) {
 		struct bsp_priv * bsp_priv = priv->plat->bsp_priv;
 		if ((bsp_priv) && (bsp_priv->gmac_clk_enable)) {
-			bsp_priv->gmac_clk_enable(false);
+			bsp_priv->gmac_clk_enable(bsp_priv, false);
 		}
 	}
 
@@ -2013,10 +2038,10 @@ static int stmmac_release(struct net_device *dev)
 		struct bsp_priv * bsp_priv = priv->plat->bsp_priv;
 		if (bsp_priv) { 
 			if (bsp_priv->phy_power_on) {
-				bsp_priv->phy_power_on(false);
+				bsp_priv->phy_power_on(bsp_priv, false);
 			}
 			if (bsp_priv->gmac_clk_enable) {
-				bsp_priv->gmac_clk_enable(false);
+				bsp_priv->gmac_clk_enable(bsp_priv, false);
 			}
 		}
 	}
@@ -3114,7 +3139,7 @@ int stmmac_suspend(struct net_device *ndev)
 			bsp_priv = priv->plat->bsp_priv;
 			pwr_off_phy = true;
 			if (bsp_priv && bsp_priv->gmac_clk_enable) {
-				bsp_priv->gmac_clk_enable(false);
+				bsp_priv->gmac_clk_enable(bsp_priv, false);
 			}
 		}
 	}
@@ -3122,7 +3147,7 @@ int stmmac_suspend(struct net_device *ndev)
 
 	if (pwr_off_phy && bsp_priv) {
 		if (bsp_priv->phy_power_on) {
-			bsp_priv->phy_power_on(false);
+			bsp_priv->phy_power_on(bsp_priv, false);
 		}
 	}
 
@@ -3139,22 +3164,22 @@ int stmmac_resume(struct net_device *ndev)
 	if (!netif_running(ndev))
 		return 0;
 
-	spin_lock_irqsave(&priv->lock, flags);
-
 	/* Power Down bit, into the PM register, is cleared
 	 * automatically as soon as a magic packet or a Wake-up frame
 	 * is received. Anyway, it's better to manually clear
 	 * this bit because it can generate problems while resuming
 	 * from another devices (e.g. serial console).
 	 */
-	if (device_may_wakeup(priv->device))
+	if (device_may_wakeup(priv->device)) {
+		spin_lock_irqsave(&priv->lock, flags);
 		priv->hw->mac->pmt(priv->ioaddr, 0);
-	else {
+		spin_unlock_irqrestore(&priv->lock, flags);
+	} else {
 		/* enable the clk prevously disabled */
 		if (priv->plat && (priv->plat->bsp_priv)) {
 			bsp_priv = priv->plat->bsp_priv;
 			if (bsp_priv && bsp_priv->gmac_clk_enable) {
-				bsp_priv->gmac_clk_enable(true);
+				bsp_priv->gmac_clk_enable(bsp_priv, true);
 			}
 
 			pwr_on_phy = true;
@@ -3162,6 +3187,8 @@ int stmmac_resume(struct net_device *ndev)
 	}
 
 	netif_device_attach(ndev);
+
+	spin_lock_irqsave(&priv->lock, flags);
 
 	/* Enable the MAC and DMA */
 	stmmac_set_mac(priv->ioaddr, true);
@@ -3176,18 +3203,22 @@ int stmmac_resume(struct net_device *ndev)
 
 	if (pwr_on_phy && bsp_priv) {
 		if (bsp_priv->phy_power_on) {
-			bsp_priv->phy_power_on(true);
+			bsp_priv->phy_power_on(bsp_priv, true);
 		}
 	}
 
 	if (priv->phydev)
 		phy_start(priv->phydev);
 
-	if ((bsp_priv->chip == RK322X_GMAC) && (bsp_priv->internal_phy)) {
+	if ((bsp_priv->chip == RK322X_GMAC ||
+	     bsp_priv->chip == RK322XH_GMAC) &&
+	    (bsp_priv->internal_phy)) {
 		rk322x_phy_adjust(priv->phydev);
 	}
 
-	if (bsp_priv && (bsp_priv->chip == RK322X_GMAC) && (bsp_priv->internal_phy))
+	if ((bsp_priv->chip == RK322X_GMAC ||
+	     bsp_priv->chip == RK322XH_GMAC) &&
+	    (bsp_priv->internal_phy))
 		schedule_delayed_work(&bsp_priv->resume_work, 2 * HZ); /* delay 2s */
 
 	return 0;

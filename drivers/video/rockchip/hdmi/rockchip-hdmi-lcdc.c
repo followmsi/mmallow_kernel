@@ -710,7 +710,7 @@ static const struct hdmi_video_timing hdmi_mode[] = {
 			.name = "1440x900p@60Hz",
 			.refresh = 60,
 			.xres = 1440,
-			.yres = 768,
+			.yres = 900,
 			.pixclock = 106500000,
 			.left_margin = 232,
 			.right_margin = 80,
@@ -775,7 +775,7 @@ static const struct hdmi_video_timing hdmi_mode[] = {
 
 static int hdmi_set_info(struct rk_screen *screen, struct hdmi *hdmi)
 {
-	int i, vic;
+	int i, vic, colorimetry;
 	struct fb_videomode *mode;
 
 	if (screen == NULL || hdmi == NULL)
@@ -800,10 +800,25 @@ static int hdmi_set_info(struct rk_screen *screen, struct hdmi *hdmi)
 
 	/* screen type & face */
 	screen->type = SCREEN_HDMI;
-	if (hdmi->video.color_input == HDMI_COLOR_RGB_0_255)
+	colorimetry = hdmi->video.colorimetry;
+	mode = (struct fb_videomode *)&hdmi_mode[i].mode;
+	if (hdmi->video.color_input == HDMI_COLOR_RGB_0_255) {
 		screen->color_mode = COLOR_RGB;
-	else
+	} else if (colorimetry > HDMI_COLORIMETRY_EXTEND_ADOBE_RGB) {
+		screen->color_mode = COLOR_YCBCR_BT2020;
+		if (hdmi->video.eotf == EOTF_ST_2084)
+			screen->data_space = 1;
+	} else if (colorimetry == HDMI_COLORIMETRY_NO_DATA) {
+		if (mode->xres > 720 && mode->yres > 576)
+			screen->color_mode = COLOR_YCBCR_BT709;
+		else
+			screen->color_mode = COLOR_YCBCR;
+	} else if (colorimetry == HDMI_COLORIMETRY_SMTPE_170M) {
 		screen->color_mode = COLOR_YCBCR;
+	} else {
+		screen->color_mode = COLOR_YCBCR_BT709;
+	}
+
 	if (hdmi->vic & HDMI_VIDEO_YUV420) {
 		if (hdmi->video.color_output_depth == 10)
 			screen->face = OUT_YUV_420_10BIT;
@@ -816,8 +831,6 @@ static int hdmi_set_info(struct rk_screen *screen, struct hdmi *hdmi)
 			screen->face = hdmi_mode[i].interface;
 	}
 	screen->pixelrepeat = hdmi_mode[i].pixelrepeat - 1;
-	mode = (struct fb_videomode *)&(hdmi_mode[i].mode);
-
 	screen->mode = *mode;
 	if (hdmi->video.format_3d == HDMI_3D_FRAME_PACKING) {
 		screen->mode.pixclock = 2 * mode->pixclock;
@@ -848,7 +861,9 @@ static int hdmi_set_info(struct rk_screen *screen, struct hdmi *hdmi)
 	screen->pin_dclk = 1;
 
 	/* Swap rule */
-	if (hdmi->soctype > HDMI_SOC_RK3288 &&
+	if ((hdmi->soctype == HDMI_SOC_RV1108 ||
+	     (hdmi->soctype > HDMI_SOC_RK312X &&
+	    hdmi->soctype != HDMI_SOC_RK3288)) &&
 	    screen->color_mode > COLOR_RGB &&
 	    (screen->face == OUT_P888 ||
 	     screen->face == OUT_P101010))
@@ -882,7 +897,7 @@ static int hdmi_set_info(struct rk_screen *screen, struct hdmi *hdmi)
 int hdmi_find_best_mode(struct hdmi *hdmi, int vic)
 {
 	struct list_head *pos, *head = &hdmi->edid.modelist;
-	struct display_modelist *modelist;
+	struct display_modelist *modelist = NULL;
 	int found = 0;
 
 	if (vic) {
@@ -1095,6 +1110,17 @@ static void hdmi_sort_modelist(struct hdmi_edid *edid, int feature)
 			}
 			if (vic == hdmi_mode[i].vic ||
 			    vic == hdmi_mode[i].vic_2nd) {
+				/* For some TV, e.g. Haier LS49AL88A92.
+				 * There is no YUV420 descriptor, but contain
+				 * 4k 60/50 RGB444 mode, e.g. 3840x2160p-60.
+				 * So we think it support 4K 60/50 YCbCr420
+				 * mode.
+				 */
+				if (hdmi_mode[i].mode.pixclock > 340000000 &&
+				    edid->maxtmdsclock < 340000000 &&
+				    !(modelist->vic & HDMI_VIDEO_YUV420))
+					modelist->vic |= HDMI_VIDEO_YUV420;
+
 				if ((feature & SUPPORT_4K) == 0 &&
 				    hdmi_mode[i].mode.xres >= 3840)
 					continue;
@@ -1121,7 +1147,6 @@ static void hdmi_sort_modelist(struct hdmi_edid *edid, int feature)
 				modelist->mode = hdmi_mode[i].mode;
 				if (modelist->vic & HDMI_VIDEO_YUV420)
 					modelist->mode.flag = 1;
-
 				compare = 1;
 				m = (struct fb_videomode *)&(modelist->mode);
 				list_for_each(pos_new, &head_new) {
@@ -1163,7 +1188,7 @@ static void hdmi_sort_modelist(struct hdmi_edid *edid, int feature)
 /**
  * hdmi_ouputmode_select - select hdmi transmitter output mode: hdmi or dvi?
  * @hdmi: handle of hdmi
- * @edid_ok: get EDID data success or not, HDMI_ERROR_SUCESS means success.
+ * @edid_ok: get EDID data success or not, HDMI_ERROR_SUCCESS means success.
  */
 int hdmi_ouputmode_select(struct hdmi *hdmi, int edid_ok)
 {
@@ -1172,7 +1197,7 @@ int hdmi_ouputmode_select(struct hdmi *hdmi, int edid_ok)
 	struct fb_videomode *modedb = NULL, *mode = NULL;
 	int i, pixclock, feature = hdmi->property->feature;
 
-	if (edid_ok != HDMI_ERROR_SUCESS) {
+	if (edid_ok != HDMI_ERROR_SUCCESS) {
 		dev_err(hdmi->dev, "warning: EDID error, assume sink as HDMI !!!!");
 		hdmi->edid.status = -1;
 		hdmi->edid.sink_hdmi = 1;
@@ -1267,7 +1292,7 @@ int hdmi_ouputmode_select(struct hdmi *hdmi, int edid_ok)
 		hdmi_sort_modelist(&hdmi->edid, hdmi->property->feature);
 	}
 
-	return HDMI_ERROR_SUCESS;
+	return HDMI_ERROR_SUCCESS;
 }
 
 /**

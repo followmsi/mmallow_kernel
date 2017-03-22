@@ -45,6 +45,7 @@
 #include <linux/of_device.h>
 #include <linux/of_gpio.h>
 #endif
+#include <linux/soc/rockchip/rk_vendor_storage.h>
 
 #if 0
 #define DBG(x...)   printk(KERN_INFO "[WLAN_RFKILL]: "x)
@@ -132,6 +133,10 @@ int get_wifi_chip_type(void)
         type = WIFI_RTL8723AS;        
     } else if (strcmp(wifi_chip_type_string, "rtl8723bs_vq0") == 0) {
         type = WIFI_RTL8723BS_VQ0;        
+    } else if (strcmp(wifi_chip_type_string, "rtl8723cs") == 0) {
+        type = WIFI_RTL8723CS;
+    } else if (strcmp(wifi_chip_type_string, "rtl8723ds") == 0) {
+	type = WIFI_RTL8723DS;
     } else if (strcmp(wifi_chip_type_string, "rtl8723bs") == 0) {
         type = WIFI_RTL8723BS;
     } else if (strcmp(wifi_chip_type_string, "rtl8723au") == 0) {
@@ -146,6 +151,8 @@ int get_wifi_chip_type(void)
         type = WIFI_RTL8189FS;
     } else if (strcmp(wifi_chip_type_string, "rtl8188fu") == 0) {
         type = WIFI_RTL8188FU;
+    } else if (strcmp(wifi_chip_type_string, "rtl8822bs") == 0) {
+	type = WIFI_RTL8822BS;
     } else if (strcmp(wifi_chip_type_string, "esp8089") == 0) {
         type = WIFI_ESP8089;
     } else if (strcmp(wifi_chip_type_string, "ssv6051") == 0) {
@@ -595,10 +602,48 @@ static int rockchip_wifi_rand_mac_addr(unsigned char *buf)
 }
 #endif
 
+//#define RANDOM_ADDRESS_SAVE
+static int get_wifi_addr_vendor_storage(unsigned char *addr)
+{
+	int ret;
+
+	ret = rk_vendor_read(WIFI_MAC_ID, addr, 6);
+	if (ret != 6 || is_zero_ether_addr(addr)) {
+		LOG("%s: rk_vendor_read wifi mac address failed (%d)\n",
+			__func__, ret);
+#ifdef RANDOM_ADDRESS_SAVE
+		random_ether_addr(addr);
+		LOG("%s random mac addr: %02x:%02x:%02x:%02x:%02x:%02x\n",
+			__func__, addr[0], addr[1], addr[2],
+			addr[3], addr[4], addr[5]);
+		ret = rk_vendor_write(WIFI_MAC_ID, addr, 6);
+		if (ret != 0) {
+			LOG("%s: vendor write wifi mac address failed (%d)\n",
+				__func__, ret);
+			memset(addr, 0, 6);
+			//return -1;
+		}
+#else
+		//return -1;
+#endif
+	} else {
+		LOG("%s: read mac addr: %02x:%02x:%02x:%02x:%02x:%02x\n",
+			__func__, addr[0], addr[1], addr[2],
+			addr[3], addr[4], addr[5]);
+	}
+	return 0;
+}
+
 int rockchip_wifi_mac_addr(unsigned char *buf)
 {
     char mac_buf[20] = {0};
     LOG("%s: enter.\n", __func__);
+
+	// from vendor storage
+	if (is_zero_ether_addr(wifi_custom_mac_addr)) {
+		if (get_wifi_addr_vendor_storage(wifi_custom_mac_addr) != 0)
+			return -1;
+	}
 
     // from vflash
     if(is_zero_ether_addr(wifi_custom_mac_addr)) {
@@ -686,13 +731,20 @@ static int rockchip_wifi_voltage_select(void)
 	        return -1;
 	    }
 	} else if (cpu_is_rk3036() || cpu_is_rk312x() || cpu_is_rk322x()) {
+	} else if (of_machine_is_compatible("rockchip,rk3228h") ||
+		of_machine_is_compatible("rockchip,rk3229h")) {
+			LOG("%s: this is rk3228h or rk3229h ,todo......!\n", __func__);
 	} else { // rk3368
 #ifdef CONFIG_MFD_SYSCON
 	    if (voltage > 2700 && voltage < 3500) {
-	        regmap_write(mrfkill->pdata->grf, RK3368_GRF_IO_VSEL, ((1<<3)<<16)|(0<<3)); //3.3
+		if (mrfkill->pdata->grf)
+			regmap_write(mrfkill->pdata->grf, RK3368_GRF_IO_VSEL,
+				     ((1 << 3) << 16) | (0 << 3));
 	        LOG("%s: wifi & sdio reference voltage: 3.3V\n", __func__);
 	    } else if (voltage  > 1500 && voltage < 1950) {
-	        regmap_write(mrfkill->pdata->grf, RK3368_GRF_IO_VSEL, ((1<<3)<<16)|(1<<3)); //1.8
+		if (mrfkill->pdata->grf)
+			regmap_write(mrfkill->pdata->grf, RK3368_GRF_IO_VSEL,
+				     ((1 << 3) << 16) | (1 << 3));
 	        LOG("%s: wifi & sdio reference voltage: 1.8V\n", __func__);
 	    } else
 #endif

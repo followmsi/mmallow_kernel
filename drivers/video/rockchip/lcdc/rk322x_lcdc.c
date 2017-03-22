@@ -1300,7 +1300,7 @@ static void vop_bcsh_path_sel(struct rk_lcdc_driver *dev_drv)
 
 	vop_msk_reg(vop_dev, SYS_CTRL, V_OVERLAY_MODE(dev_drv->overlay_mode));
 	if (dev_drv->overlay_mode == VOP_YUV_DOMAIN) {
-		if (dev_drv->output_color == COLOR_YCBCR)	/* bypass */
+		if (IS_YUV_COLOR(dev_drv->output_color))	/* bypass */
 			vop_msk_reg(vop_dev, BCSH_CTRL,
 				    V_BCSH_Y2R_EN(0) | V_BCSH_R2Y_EN(0));
 		else		/* YUV2RGB */
@@ -2496,8 +2496,8 @@ static int vop_get_backlight_device(struct rk_lcdc_driver *dev_drv)
 		return -EINVAL;
 	max = length / sizeof(u32);
 	last = max - 1;
-	brightness_levels = kmalloc(256, GFP_KERNEL);
-	if (brightness_levels)
+	brightness_levels = kmalloc(sizeof(*brightness_levels) * max, GFP_KERNEL);
+	if (!brightness_levels)
 		return -ENOMEM;
 
 	if (!of_property_read_u32_array(backlight, "brightness-levels",
@@ -2568,7 +2568,6 @@ static int vop_early_resume(struct rk_lcdc_driver *dev_drv)
 	spin_lock(&vop_dev->reg_lock);
 
 	vop_msk_reg(vop_dev, DSP_CTRL0, V_DSP_OUT_ZERO(0));
-	vop_msk_reg(vop_dev, SYS_CTRL, V_VOP_STANDBY_EN(0));
 	vop_msk_reg(vop_dev, DSP_CTRL0, V_DSP_BLANK_EN(0));
 	vop_cfg_done(vop_dev);
 	spin_unlock(&vop_dev->reg_lock);
@@ -2580,6 +2579,11 @@ static int vop_early_resume(struct rk_lcdc_driver *dev_drv)
 		mdelay(50);
 		rockchip_iovmm_activate(dev_drv->dev);
 	}
+
+	spin_lock(&vop_dev->reg_lock);
+	vop_msk_reg(vop_dev, SYS_CTRL, V_VOP_STANDBY_EN(0));
+	vop_cfg_done(vop_dev);
+	spin_unlock(&vop_dev->reg_lock);
 
 	dev_drv->suspend_flag = 0;
 
@@ -3370,6 +3374,36 @@ static int vop_set_overscan(struct rk_lcdc_driver *dev_drv,
 	return 0;
 }
 
+static int vop_extern_func(struct rk_lcdc_driver *dev_drv, int cmd)
+{
+	struct vop_device *vop_dev =
+	    container_of(dev_drv, struct vop_device, driver);
+	u64 val;
+
+	if (unlikely(!vop_dev->clk_on)) {
+		pr_info("%s,clk_on = %d\n", __func__, vop_dev->clk_on);
+		return 0;
+	}
+
+	switch (cmd) {
+	case UPDATE_CABC_PWM:
+		vop_cfg_done(vop_dev);
+		break;
+	case SET_DSP_MIRROR:
+		val = V_DSP_X_MIR_EN(dev_drv->cur_screen->x_mirror) |
+			V_DSP_Y_MIR_EN(dev_drv->cur_screen->y_mirror);
+		vop_msk_reg(vop_dev, DSP_CTRL0, val);
+		pr_info("%s: xmirror: %d, ymirror: %d\n",
+			__func__, dev_drv->cur_screen->x_mirror,
+			dev_drv->cur_screen->y_mirror);
+		break;
+	default:
+		break;
+	}
+
+	return 0;
+}
+
 static struct rk_lcdc_drv_ops lcdc_drv_ops = {
 	.open = vop_open,
 	.win_direct_en = vop_win_direct_en,
@@ -3408,6 +3442,7 @@ static struct rk_lcdc_drv_ops lcdc_drv_ops = {
 	.backlight_close = vop_backlight_close,
 	.mmu_en    = vop_mmu_en,
 	.set_overscan   = vop_set_overscan,
+	.extern_func    = vop_extern_func,
 };
 
 static irqreturn_t vop_isr(int irq, void *dev_id)

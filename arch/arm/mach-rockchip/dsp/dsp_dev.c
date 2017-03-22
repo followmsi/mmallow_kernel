@@ -18,6 +18,7 @@
 #include <linux/slab.h>
 #include <linux/firmware.h>
 #include <linux/of_address.h>
+#include <linux/rockchip/pmu.h>
 #include "dsp_dbg.h"
 #include "dsp_ioctl.h"
 #include "dsp_dev.h"
@@ -32,16 +33,17 @@
 #define DSP_TRACE_SLOT_COUNT        (DSP_TRACE_BUFFER_SIZE / \
 				     DSP_TRACE_SLOT_SIZE)
 
-#define DSP_FIRMWARE_NAME    "rkdsp.bin"
 #define DSP_CMP_OFFSET       0x400000
 
-#define DSP_GRF_CON0         0x0000
-#define DSP_GLOBAL_RSTN_REQ  BIT(13)
+#define DSP_GRF_CON0                0x0000
+#	define DSP_GLOBAL_RSTN_REQ  BIT(13)
+#define DSP_GRF_STAT1               0x0024
+#	define DSP_PSU_CORE_IDLE    BIT(5)
+#	define DSP_PSU_DSP_IDLE     BIT(4)
 
 #define DSP_DEV_SESSION      0
 
-#define MHZ                  (1000 * 1000)
-#define DSP_RATE             (600 * MHZ)
+static int dsp_dev_power_off(struct dsp_dev *dev);
 
 static void dsp_set_div_clk(struct clk *clock, int divide)
 {
@@ -49,6 +51,55 @@ static void dsp_set_div_clk(struct clk *clock, int divide)
 	unsigned long rate = clk_get_rate(parent);
 
 	clk_set_rate(clock, (rate / divide) + 1);
+}
+
+static void dsp_dev_clk_enable(struct dsp_dev *dev)
+{
+
+	if (dev->dsp_dvfs_node) {
+		clk_enable_dvfs(dev->dsp_dvfs_node);
+		dvfs_clk_prepare_enable(dev->dsp_dvfs_node);
+	} else {
+		clk_prepare_enable(dev->clk_dsp);
+	}
+
+	clk_prepare_enable(dev->clk_dsp_free);
+	clk_prepare_enable(dev->clk_iop);
+	clk_prepare_enable(dev->clk_epp);
+	clk_prepare_enable(dev->clk_edp);
+	clk_prepare_enable(dev->clk_edap);
+
+	dsp_set_div_clk(dev->clk_iop, 4);
+	dsp_set_div_clk(dev->clk_epp, 2);
+	dsp_set_div_clk(dev->clk_edp, 2);
+	dsp_set_div_clk(dev->clk_edap, 2);
+}
+
+static void dsp_dev_clk_disable(struct dsp_dev *dev)
+{
+	clk_disable_unprepare(dev->clk_dsp_free);
+	clk_disable_unprepare(dev->clk_iop);
+	clk_disable_unprepare(dev->clk_epp);
+	clk_disable_unprepare(dev->clk_edp);
+	clk_disable_unprepare(dev->clk_edap);
+
+	if (dev->dsp_dvfs_node) {
+		dvfs_clk_disable_unprepare(dev->dsp_dvfs_node);
+		clk_disable_dvfs(dev->dsp_dvfs_node);
+	} else {
+		clk_disable_unprepare(dev->clk_dsp);
+	}
+}
+
+static void dsp_grf_global_reset_assert(struct dsp_dev *dev)
+{
+	writel_relaxed(DSP_GLOBAL_RSTN_REQ << 16, dev->dsp_grf + DSP_GRF_CON0);
+}
+
+static void dsp_grf_global_reset_deassert(struct dsp_dev *dev)
+{
+	writel_relaxed((DSP_GLOBAL_RSTN_REQ << 16) | DSP_GLOBAL_RSTN_REQ,
+		       dev->dsp_grf + DSP_GRF_CON0);
 }
 
 static int dsp_dev_trace(struct dsp_dev *dev, u32 index)
@@ -59,7 +110,8 @@ static int dsp_dev_trace(struct dsp_dev *dev, u32 index)
 
 	if (trace_end < trace_start ||
 	    trace_end - trace_start > DSP_TRACE_SLOT_COUNT) {
-		dsp_err("trace slot overflow\n");
+		dsp_err("trace slot overflow, start=%d, end=%d\n",
+			trace_start, trace_end);
 		ret = -EFAULT;
 		goto out;
 	}
@@ -81,27 +133,29 @@ out:
 	return ret;
 }
 
-static int dsp_dev_work_done(struct dsp_work *work, void *data)
+static int dsp_dev_work_done(struct dsp_dev *dev, struct dsp_work *work)
 {
-	int ret = 0;
-	struct dsp_dev *dev = data;
-
 	dsp_debug_enter();
 
 	/*
-	 * If a work is not belone to a session,
-	 * this work is created by DSP device for config purpose.
-	 * so the work must be destroy here.
+	 * Algorithms can request its satisfying DSP
+	 * rate respectively
 	 */
-	if (work->session == DSP_DEV_SESSION)
-		dsp_work_destroy(dev->dma_pool, work);
-	else
-		dev->client->work_done(dev->client, work);
+	if (dev->dsp_dvfs_node && work->rate) {
+		dvfs_clk_set_rate(dev->dsp_dvfs_node, work->rate);
+		dsp_debug(DEBUG_DEVICE, "request DSP rate=%d\n", work->rate);
+	}
 
+	/* We should not cancel work in timeout callback */
+	if (work->result != DSP_WORK_ETIMEOUT)
+		cancel_delayed_work_sync(&dev->guard_work);
+
+	dsp_work_set_status(work, DSP_WORK_DONE);
+	dev->client->work_done(dev->client, work);
 	mutex_unlock(&dev->lock);
 
 	dsp_debug_leave();
-	return ret;
+	return 0;
 }
 
 static int dsp_dev_work(struct dsp_dev *dev, struct dsp_work *work)
@@ -112,66 +166,66 @@ static int dsp_dev_work(struct dsp_dev *dev, struct dsp_work *work)
 
 	mutex_lock(&dev->lock);
 
-	work->done = dsp_dev_work_done;
+	schedule_delayed_work(&dev->guard_work, HZ);
+
 	if (dev->dsp_dvfs_node)
 		work->rate = dvfs_clk_get_rate(dev->dsp_dvfs_node);
 	else
 		work->rate = 0;
+	dsp_work_set_status(work, DSP_WORK_RUNNING);
+
+	dev->running_work = work;
 	dev->mbox->send_data(dev->mbox, MBOX_CHAN_0, DSP_CMD_WORK,
 			     work->dma_addr);
+
 	dsp_debug_leave();
 	return ret;
 }
 
-static int dsp_dev_receive_data(struct dsp_mbox_client *client,
-				u32 chan, u32 cmd, u32 data)
+/*
+ * dsp_dev_work_timeout - Work guard work timeout callback
+ *
+ * Inevitably, in some cases, DSP hangs up by an unexpected bug, and no
+ * interrupt comes from DSP. For stability, a work guard is used to watch
+ * over work processing. If a work is processed by DSP more than 1 second,
+ * this callback will be called to recover DSP from hang up status.
+ */
+static void dsp_dev_work_timeout(struct work_struct *work)
 {
-	int ret = 0;
-	struct dsp_dev *dev = container_of(client, struct dsp_dev, mbox_client);
+	struct dsp_dev *dev =
+		container_of(work, struct dsp_dev, guard_work.work);
+	struct dsp_work *timeout_work = dev->running_work;
 
 	dsp_debug_enter();
 
-	dsp_debug(DEBUG_DEVICE,
-		  "received mbox data, chan=%d, cmd=0x%08x, data=0x%08x\n",
-		  chan, cmd, data);
+	dev->client->device_pause(dev->client);
 
-	switch (chan) {
-	case MBOX_CHAN_0: {
-		if (cmd == DSP_CMD_READY) {
-			dev->client->device_ready(dev->client);
-		} else if (cmd == DSP_CMD_WORK) {
-			struct dsp_work *work;
+	dsp_err("start to recover DSP from hang up status\n");
+	timeout_work->result = DSP_WORK_ETIMEOUT;
+	dsp_dev_work_done(dev, timeout_work);
 
-			work = (struct dsp_work *)phys_to_virt(data);
-			if (!work) {
-				dsp_err("invalid work from dsp\n");
-				ret = -EFAULT;
-				goto out;
-			}
-			/*
-			 * Algorithms can request its satisfying DSP
-			 * rate respectively
-			 */
-			if (dev->dsp_dvfs_node && work->rate) {
-				dvfs_clk_set_rate(dev->dsp_dvfs_node, work->rate);
-				dsp_debug(DEBUG_DEVICE, "request DSP rate=%d\n",
-					  work->rate);
-			}
-			work->done(work, dev);
-		}
-	} break;
+	/*
+	 * Reset DSP core. Before reset DSP, we should request NoC idle
+	 * to prevent DSP access system bus which maybe cause system halt.
+	 */
+	rockchip_pmu_ops.set_idle_request(IDLE_REQ_DSP, true);
+	reset_control_assert(dev->core_rst);
+	udelay(1);
+	rockchip_pmu_ops.set_idle_request(IDLE_REQ_DSP, false);
+	reset_control_deassert(dev->core_rst);
 
-	case MBOX_CHAN_3: {
-		if (cmd == DSP_CMD_TRACE) {
-			ret = dsp_dev_trace(dev, data);
-			dev->mbox->send_data(dev->mbox, chan, cmd,
-					     dev->trace_index);
-		}
-	} break;
-	}
-out:
 	dsp_debug_leave();
-	return ret;
+}
+
+static int dsp_dev_config_done(struct dsp_dev *dev, struct dsp_work *work)
+{
+	dsp_debug_enter();
+
+	dsp_work_destroy(dev->dma_pool, work);
+	dev->client->device_ready(dev->client);
+
+	dsp_debug_leave();
+	return 0;
 }
 
 static int dsp_dev_config(struct dsp_dev *dev)
@@ -187,10 +241,13 @@ static int dsp_dev_config(struct dsp_dev *dev)
 	config_params.type = DSP_CONFIG_INIT;
 	config_params.trace_buffer = dev->trace_dma;
 	config_params.trace_slot_size = DSP_TRACE_SLOT_SIZE;
-	if (dev->trace_buffer)
+	if (dev->trace_buffer) {
+		memset(dev->trace_buffer, 0, DSP_TRACE_BUFFER_SIZE);
+		dev->trace_index = 0;
 		config_params.trace_buffer_size = DSP_TRACE_BUFFER_SIZE;
-	else
+	} else {
 		config_params.trace_buffer_size = 0;
+	}
 
 	dsp_debug(DEBUG_DEVICE, "dsp trace start 0x%08x\n", dev->trace_dma);
 
@@ -212,7 +269,66 @@ static int dsp_dev_config(struct dsp_dev *dev)
 
 	dsp_work_set_type(work, DSP_CONFIG_WORK);
 	dsp_work_set_params(work, (void *)&config_params);
-	dsp_dev_work(dev, work);
+	dsp_work_set_status(work, DSP_WORK_RUNNING);
+	dev->mbox->send_data(dev->mbox, MBOX_CHAN_1, DSP_CMD_CONFIG,
+			     work->dma_addr);
+out:
+	dsp_debug_leave();
+	return ret;
+}
+
+static int dsp_dev_receive_data(struct dsp_mbox_client *client,
+				u32 chan, u32 cmd, u32 data)
+{
+	int ret = 0;
+	struct dsp_dev *dev = container_of(client, struct dsp_dev, mbox_client);
+
+	dsp_debug_enter();
+
+	dsp_debug(DEBUG_DEVICE,
+		  "received mbox data, chan=%d, cmd=0x%08x, data=0x%08x\n",
+		  chan, cmd, data);
+
+	switch (chan) {
+	case MBOX_CHAN_0: {
+		if (cmd == DSP_CMD_WORK_DONE) {
+			struct dsp_work *work;
+
+			work = (struct dsp_work *)phys_to_virt(data);
+			if (!work) {
+				dsp_err("invalid work from dsp\n");
+				ret = -EFAULT;
+				goto out;
+			}
+			dsp_dev_work_done(dev, work);
+		}
+	} break;
+
+	case MBOX_CHAN_1: {
+		if (cmd == DSP_CMD_READY) {
+			dsp_dev_config(dev);
+		} else if (cmd == DSP_CMD_CONFIG_DONE) {
+			struct dsp_work *work;
+
+			work = (struct dsp_work *)phys_to_virt(data);
+			if (!work) {
+				dsp_err("invalid config work from dsp\n");
+				ret = -EFAULT;
+				goto out;
+			}
+			dsp_dev_config_done(dev, work);
+		}
+	} break;
+
+	case MBOX_CHAN_3: {
+		if (cmd == DSP_CMD_TRACE) {
+			ret = dsp_dev_trace(dev, data);
+			dev->mbox->send_data(dev->mbox, chan,
+					     DSP_CMD_TRACE_DONE,
+					     dev->trace_index);
+		}
+	} break;
+	}
 out:
 	dsp_debug_leave();
 	return ret;
@@ -220,13 +336,30 @@ out:
 
 static int dsp_dev_suspend(struct dsp_dev *dev)
 {
+	u32 status = 0;
 	int ret = 0;
 
 	dsp_debug_enter();
-	/* TODO wait DSP idle and config DSP enter sleep mode */
-	dev->status = DSP_SLEEP;
-	dsp_debug_leave();
 
+	if (dev->status != DSP_ON)
+		goto out;
+
+	/*
+	 * Only if DSP is in standby mode, we can disable DSP external clock.
+	 * After that DSP is in DSP_SLEEP status.
+	 */
+	status = readl_relaxed(dev->dsp_grf + DSP_GRF_STAT1);
+	if (status & DSP_PSU_DSP_IDLE) {
+		dsp_debug(DEBUG_DEVICE, "Disbale DSP clk when standby\n");
+		dsp_dev_clk_disable(dev);
+		dev->status = DSP_SLEEP;
+	} else {
+		dsp_err("DSP is working, cannot enter suspend status\n");
+		ret = -EFAULT;
+	}
+
+out:
+	dsp_debug_leave();
 	return ret;
 }
 
@@ -235,10 +368,17 @@ static int dsp_dev_resume(struct dsp_dev *dev)
 	int ret = 0;
 
 	dsp_debug_enter();
-	/* TODO config DSP enter work state */
-	dev->status = DSP_ON;
-	dsp_debug_leave();
 
+	if (dev->status != DSP_SLEEP)
+		goto out;
+
+	/* Restore DSP external clock when DSP is in standby mode */
+	dsp_debug(DEBUG_DEVICE, "Enable DSP clk when standby\n");
+	dsp_dev_clk_enable(dev);
+	dev->status = DSP_ON;
+
+out:
+	dsp_debug_leave();
 	return ret;
 }
 
@@ -246,34 +386,24 @@ static int dsp_dev_power_on(struct dsp_dev *dev)
 {
 	int ret = 0;
 
-	if (!(dev->status == DSP_OFF))
-		return ret;
-
 	dsp_debug_enter();
 
-	clk_prepare_enable(dev->clk_dsp);
-	clk_prepare_enable(dev->clk_dsp_free);
-	clk_prepare_enable(dev->clk_iop);
-	clk_prepare_enable(dev->clk_epp);
-	clk_prepare_enable(dev->clk_edp);
-	clk_prepare_enable(dev->clk_edap);
+	if (!(dev->status == DSP_OFF))
+		goto out;
 
-	dsp_set_div_clk(dev->clk_iop, 4);
-	dsp_set_div_clk(dev->clk_epp, 2);
-	dsp_set_div_clk(dev->clk_edp, 2);
-	dsp_set_div_clk(dev->clk_edap, 2);
-	usleep_range(200, 500);
+	dsp_dev_clk_enable(dev);
+	udelay(1);
 
-	writel_relaxed((DSP_GLOBAL_RSTN_REQ << 16) | DSP_GLOBAL_RSTN_REQ,
-		       dev->dsp_grf + DSP_GRF_CON0);
+	dsp_grf_global_reset_deassert(dev);
 
 	reset_control_deassert(dev->sys_rst);
 	reset_control_deassert(dev->global_rst);
 	reset_control_deassert(dev->oecm_rst);
-	usleep_range(500, 1000);
+	udelay(1);
 
-	ret = dev->loader->load_image(dev->loader, "MAIN");
+	ret = dsp_loader_load_image(dev->device, dev->loader, "MAIN");
 	if (ret) {
+		dev->status = DSP_ON;
 		dsp_err("load dsp os image failed\n");
 		goto out;
 	}
@@ -282,22 +412,10 @@ static int dsp_dev_power_on(struct dsp_dev *dev)
 	reset_control_deassert(dev->core_rst);
 
 	dev->status = DSP_ON;
+	pr_info("DSP power on\n");
 out:
-	if (ret) {
-		reset_control_assert(dev->sys_rst);
-		reset_control_assert(dev->global_rst);
-		reset_control_assert(dev->oecm_rst);
-
-		writel_relaxed(DSP_GLOBAL_RSTN_REQ << 16,
-			       dev->dsp_grf + DSP_GRF_CON0);
-
-		clk_disable_unprepare(dev->clk_dsp);
-		clk_disable_unprepare(dev->clk_dsp_free);
-		clk_disable_unprepare(dev->clk_iop);
-		clk_disable_unprepare(dev->clk_epp);
-		clk_disable_unprepare(dev->clk_edp);
-		clk_disable_unprepare(dev->clk_edap);
-	}
+	if (ret)
+		dsp_dev_power_off(dev);
 
 	dsp_debug_leave();
 	return ret;
@@ -307,10 +425,13 @@ static int dsp_dev_power_off(struct dsp_dev *dev)
 {
 	int ret = 0;
 
-	if (dev->status == DSP_OFF)
-		return ret;
-
 	dsp_debug_enter();
+
+	if (dev->status == DSP_OFF)
+		goto out;
+
+	dev->resume(dev);
+
 	dsp_dev_trace(dev, dev->trace_index + DSP_TRACE_SLOT_COUNT);
 
 	reset_control_assert(dev->core_rst);
@@ -318,17 +439,12 @@ static int dsp_dev_power_off(struct dsp_dev *dev)
 	reset_control_assert(dev->global_rst);
 	reset_control_assert(dev->oecm_rst);
 
-	writel_relaxed(DSP_GLOBAL_RSTN_REQ << 16, dev->dsp_grf + DSP_GRF_CON0);
-
-	clk_disable_unprepare(dev->clk_dsp);
-	clk_disable_unprepare(dev->clk_dsp_free);
-	clk_disable_unprepare(dev->clk_iop);
-	clk_disable_unprepare(dev->clk_epp);
-	clk_disable_unprepare(dev->clk_edp);
-	clk_disable_unprepare(dev->clk_edap);
+	dsp_grf_global_reset_assert(dev);
+	dsp_dev_clk_disable(dev);
 
 	dev->status = DSP_OFF;
-
+	pr_info("DSP power off\n");
+out:
 	dsp_debug_leave();
 	return ret;
 }
@@ -458,7 +574,6 @@ int dsp_dev_create(struct platform_device *pdev, struct dma_pool *dma_pool,
 	dev->off = dsp_dev_power_off;
 	dev->suspend = dsp_dev_suspend;
 	dev->resume = dsp_dev_resume;
-	dev->config = dsp_dev_config;
 	dev->work = dsp_dev_work;
 	dev->dma_pool = dma_pool;
 	dev->mbox_client.receive_data = dsp_dev_receive_data;
@@ -494,9 +609,6 @@ int dsp_dev_create(struct platform_device *pdev, struct dma_pool *dma_pool,
 		dsp_err("cannot create dsp image loader\n");
 		goto out;
 	}
-	request_firmware_nowait(THIS_MODULE, 0, DSP_FIRMWARE_NAME, &pdev->dev,
-				GFP_KERNEL, dev->loader,
-				dsp_loader_request_firmware);
 
 	dev->trace_buffer = dma_pool_alloc(dma_pool, GFP_KERNEL, &dma_addr);
 	if (dev->trace_buffer) {
@@ -505,14 +617,16 @@ int dsp_dev_create(struct platform_device *pdev, struct dma_pool *dma_pool,
 	}
 
 	dev->dsp_dvfs_node = clk_get_dvfs_node("clk_dsp");
-	if (dev->dsp_dvfs_node)
-		clk_enable_dvfs(dev->dsp_dvfs_node);
+	INIT_DELAYED_WORK(&dev->guard_work, dsp_dev_work_timeout);
 
+	dev->device = &pdev->dev;
 	(*dev_out) = dev;
 out:
 	if (ret) {
-		dsp_loader_destroy(dev->loader);
-		dsp_dma_destroy(dev->dma);
+		if (dev) {
+			dsp_loader_destroy(dev->loader);
+			dsp_dma_destroy(dev->dma);
+		}
 
 		(*dev_out) = NULL;
 	}

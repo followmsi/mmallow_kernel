@@ -31,9 +31,12 @@ snd-soc-da9055-objs := da9055.o
 snd-soc-dfbmcs320-objs := dfbmcs320.o
 snd-soc-jz4740-codec-objs := jz4740.o
 snd-soc-dmic-objs := dmic.o
+snd-soc-dummy-codec-objs := dummy_codec.o
 snd-soc-es8323-objs := es8323.o
 snd-soc-es8316-objs := es8316.o
 snd-soc-es8323-pcm-objs := es8323_pcm.o
+snd-soc-es8396-objs := es8396.o
+snd-soc-fm1288-objs := fm1288.o
 snd-soc-isabelle-objs := isabelle.o
 snd-soc-l3-objs := l3.o
 snd-soc-lm4857-objs := lm4857.o
@@ -137,7 +140,6 @@ snd-soc-rt3224-objs := rt3261.o rt3261_ioctl.o rt_codec_ioctl.o
 snd-soc-rt3261-objs := rt3261-dsp.o
 snd-soc-cs42l52-objs := cs42l52.o
 snd-soc-rk1000-objs := rk1000_codec.o
-snd-soc-rk1108-objs := rk1108_codec.o
 snd-soc-rk3036-objs := rk3036_codec.o
 snd-soc-rk312x-objs := rk312x_codec.o
 snd-soc-rk322x-objs := rk322x_codec.o
@@ -146,6 +148,7 @@ snd-soc-rk616-objs := rk616_codec.o
 snd-soc-rk2928-objs := rk2928_codec.o
 snd-soc-rk3026-objs := rk3026_codec.o
 snd-soc-rk3190-objs := rk3190_codec.o
+snd-soc-rv1108-objs := rv1108_codec.o
 
 
 # Amp
@@ -186,9 +189,12 @@ obj-$(CONFIG_SND_SOC_DA732X)	+= snd-soc-da732x.o
 obj-$(CONFIG_SND_SOC_DA9055)	+= snd-soc-da9055.o
 obj-$(CONFIG_SND_SOC_DFBMCS320)	+= snd-soc-dfbmcs320.o
 obj-$(CONFIG_SND_SOC_DMIC)	+= snd-soc-dmic.o
+obj-$(CONFIG_SND_SOC_DUMMY_CODEC)	+= snd-soc-dummy-codec.o
 obj-$(CONFIG_SND_SOC_ES8323)	+= snd-soc-es8323.o
 obj-$(CONFIG_SND_SOC_ES8316)	+= snd-soc-es8316.o
 obj-$(CONFIG_SND_SOC_ES8323_PCM)	+= snd-soc-es8323-pcm.o
+obj-$(CONFIG_SND_SOC_ES8396)	+= snd-soc-es8396.o
+obj-$(CONFIG_SND_SOC_FM1288)	+= snd-soc-fm1288.o
 obj-$(CONFIG_SND_SOC_ISABELLE)	+= snd-soc-isabelle.o
 obj-$(CONFIG_SND_SOC_JZ4740_CODEC)	+= snd-soc-jz4740-codec.o
 obj-$(CONFIG_SND_SOC_L3)	+= snd-soc-l3.o
@@ -290,7 +296,6 @@ obj-$(CONFIG_SND_SOC_RT5639)    += snd-soc-rt5639.o
 obj-$(CONFIG_SND_SOC_RT5640)    += snd-soc-rt5640.o
 obj-$(CONFIG_SND_SOC_CS42L52)	+= snd-soc-cs42l52.o
 obj-$(CONFIG_SND_SOC_RK1000)	+= snd-soc-rk1000.o
-obj-$(CONFIG_SND_SOC_RK1108)	+= snd-soc-rk1108.o
 obj-$(CONFIG_SND_SOC_RK3036)	+= snd-soc-rk3036.o
 obj-$(CONFIG_SND_SOC_RK312X)	+= snd-soc-rk312x.o
 obj-$(CONFIG_SND_SOC_RK322X)	+= snd-soc-rk322x.o
@@ -299,6 +304,7 @@ obj-$(CONFIG_SND_SOC_RK616)	+= snd-soc-rk616.o
 obj-$(CONFIG_SND_SOC_RK2928)	+= snd-soc-rk2928.o
 obj-$(CONFIG_SND_SOC_RK3026)	+= snd-soc-rk3026.o
 obj-$(CONFIG_SND_SOC_RK3190)	+= snd-soc-rk3190.o
+obj-$(CONFIG_SND_SOC_RV1108)	+= snd-soc-rv1108.o
 
 # Amp
 obj-$(CONFIG_SND_SOC_MAX9877)	+= snd-soc-max9877.o
